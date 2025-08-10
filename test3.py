@@ -11,16 +11,14 @@ model = CM3PModel._from_config(config, torch_dtype=torch.bfloat16, attn_implemen
 # print(model)
 # print(model.config)
 # print parameter count
-total_params = sum(p.numel() for p in model.parameters())
-trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"Total parameters: {total_params:,}")
-print(f"Trainable parameters: {trainable_params:,}")
-# Check if all parameter weights are initialized
-# Print the mean and standard deviation of the weights
-for name, param in model.named_parameters():
-    if param.requires_grad:
-        print(f"Parameter: {name}, Mean: {param.data.mean().item():.4f}, Std: {param.data.std().item():.4f}")
-        if torch.isnan(param.data).any():
-            print(f"Parameter {name} has NaN values.")
-        if torch.isinf(param.data).any():
-            print(f"Parameter {name} has Inf values.")
+def print_parameters(m):
+    print(f"Model: {m.__class__.__name__}")
+    total_params = sum(p.numel() for p in m.parameters())
+    trainable_params = sum(p.numel() for p in m.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+
+print_parameters(model)
+print_parameters(model.beatmap_model)
+print_parameters(model.beatmap_model.audio_encoder)
+print_parameters(model.metadata_model)

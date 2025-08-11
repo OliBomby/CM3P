@@ -1,10 +1,11 @@
 import requests
 import torch
 from PIL import Image
-from transformers import AutoProcessor, AutoModel
+from transformers import AutoProcessor, AutoModel, CLIPProcessor
 
 model = AutoModel.from_pretrained("openai/clip-vit-base-patch32", torch_dtype=torch.bfloat16, attn_implementation="sdpa")
 processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
+CLIPProcessor
 
 url = "http://images.cocodataset.org/val2017/000000039769.jpg"
 image = Image.open(requests.get(url, stream=True).raw)

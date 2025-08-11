@@ -1,0 +1,4 @@
+accelerate
+transformers
+hydra-core
+slider @ git+https://github.com/OliBomby/slider.git@gedagedigedagedaoh

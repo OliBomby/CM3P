@@ -6,10 +6,13 @@ from fileinput import FileInput
 from os import PathLike
 from typing import Optional, Union, IO
 
+import numpy as np
 from slider import Beatmap
-from transformers import WhisperFeatureExtractor, BatchEncoding
-from transformers.utils import is_mistral_common_available, is_soundfile_available, is_torch_available, logging
+from transformers import WhisperFeatureExtractor, BatchEncoding, AutoProcessor
+from transformers.utils import is_mistral_common_available, is_soundfile_available, is_torch_available, logging, \
+    PaddingStrategy
 
+from cm3p import CM3PConfig
 from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
 
@@ -38,7 +41,6 @@ class CM3PAudioKwargs(AudioKwargs, total=False):
 class CM3PProcessorKwargs(ProcessingKwargs, total=False):
     _defaults = {
         "text_kwargs": {
-            "padding": True,
         },
         "audio_kwargs": {
             "sampling_rate": 16000,
@@ -70,12 +72,13 @@ class CM3PProcessor(ProcessorMixin):
             The beatmap tokenizer is a required input.
         metadata_tokenizer ([`CM3PMetadataTokenizer`]):
             The metadata tokenizer is a required input.
-        audio_token_id (`int`, *optional*, defaults to 24):
-            The token id used to represent audio in the tokenizer.
+        window_length (`float`, *optional*, defaults to 30.0):
+            The length of the sliding window in seconds. This is used to process the beatmap events
+            and audio in chunks.
     """
 
-    attributes = ["feature_extractor", "beatmap_parser", "beatmap_tokenizer", "metadata_tokenizer"]
-    feature_extractor_class = "WhisperFeatureExtractor"
+    attributes = ["audio_feature_extractor", "beatmap_parser", "beatmap_tokenizer", "metadata_tokenizer"]
+    audio_feature_extractor_class = "WhisperFeatureExtractor"
     beatmap_parser_class = "CM3PBeatmapParser"
     beatmap_tokenizer_class = "CM3PBeatmapTokenizer"
     metadata_tokenizer_class = "CM3PMetadataTokenizer"
@@ -86,10 +89,10 @@ class CM3PProcessor(ProcessorMixin):
         beatmap_parser: CM3PBeatmapParser,
         beatmap_tokenizer: CM3PBeatmapTokenizer,
         metadata_tokenizer: CM3PMetadataTokenizer,
-        audio_token_id: int = 24,
+        window_length: float = 30.0,
     ):
-        self.audio_token_id = audio_token_id
-        self.audio_token = beatmap_tokenizer.convert_ids_to_tokens(self.audio_token_id)
+        self.audio_token = beatmap_tokenizer.audio_token
+        self.window_length = window_length
 
         super().__init__(audio_feature_extractor, beatmap_parser, beatmap_tokenizer, metadata_tokenizer)
 
@@ -311,6 +314,8 @@ class CM3PProcessor(ProcessorMixin):
         max_source_positions = audio_kwargs.pop("max_source_positions")
         return_tensors = common_kwargs.pop("return_tensors", None)
 
+        metadata_encoding, beatmap_encoding = None, None
+
         if return_tensors != "pt":
             raise ValueError(f"{self.__class__.__name__} only supports `return_tensors='pt'`.")
 
@@ -343,45 +348,72 @@ class CM3PProcessor(ProcessorMixin):
             else:
                 audio = [None] * len(beatmap)
 
+            processed_windows = []
+            processed_audio = []
             for b, a in zip(beatmap, audio):
-                beatmap_events = self.beatmap_parser.parse(beatmap)
-                processed_windows = []
+                with sf.SoundFile(a) as f:
+                    # Read the entire audio data
+                    audio_array = f.read(dtype="float32")
+                    sampling_rate = f.samplerate
+
+                song_length = len(audio_array) / sampling_rate
+                beatmap_groups = self.beatmap_parser.parse_beatmap(b, song_length=song_length)
 
                 # Loop through with sliding window
-                for start_sec in range(0, int(duration_sec) - window_sec + 1, stride_sec):
-                    end_sec = start_sec + window_sec
+                groups_search_index = 0
+                for start_sec in np.arange(0, song_length - self.window_length, self.window_length):
+                    end_sec = start_sec + self.window_length
 
-                    # 3a. Slice audio waveform
-                    start_frame = int(start_sec * sr)
-                    end_frame = int(end_sec * sr)
-                    audio_slice = waveform[start_frame:end_frame]
+                    # Slice audio waveform
+                    start_frame = int(start_sec * sampling_rate)
+                    end_frame = int(end_sec * sampling_rate)
+                    audio_slice = audio_array[start_frame:end_frame]
 
+                    # Find groups that fall within the current window
+                    # Groups are sorted by time, so we can use a simple linear search from the last index
                     start_ms = start_sec * 1000
-                    end_ms = start_ms + (window_sec * 1000)
-                    window_events = [e for e in beatmap_events if start_ms <= e['timestamp'] < end_ms]
+                    end_ms = end_sec * 1000
+                    window_groups = []
+                    for group in itertools.islice(beatmap_groups, groups_search_index, None):
+                        if group.time < start_ms:
+                            groups_search_index += 1
+                            continue
+                        elif group.time < end_ms:
+                            window_groups.append(group)
+                            groups_search_index += 1
+                        else:
+                            break
 
                     window_encoding = self.beatmap_tokenizer(
-                        events=window_events,
+                        groups=window_groups,
                         audio=audio_slice,
+                        sampling_rate=sampling_rate,
                         window_start_ms=start_ms,
-                        **text_kwargs
+                        padding_strategy=PaddingStrategy.DO_NOT_PAD,
+                        pad_to_multiple_of=None,
+                        padding_side=None,
+                        return_attention_mask=False,
+                        return_tensors=None,
+                        prepend_batch_axis=False,
                     )
 
                     audio = window_encoding.pop("audio", None)
-                    data = dict(window_encoding)
                     if audio is not None:
-                        data["input_features"] = self._retrieve_input_features(audio, max_source_positions, **audio_kwargs)
+                        processed_audio.append(audio)
 
-                    processed_windows.append(data)
+                    processed_windows.append(window_encoding)
 
-                beatmap_encoding = BatchEncoding(data=processed_windows, tensor_type=return_tensors)
+            batch_outputs = self.beatmap_tokenizer.pad(
+                processed_windows,
+            )
 
-                    
+            beatmap_encoding = BatchFeature(data=batch_outputs, tensor_type=return_tensors)
+            beatmap_encoding["input_features"] = self._retrieve_input_features(processed_audio, max_source_positions, **audio_kwargs)
 
-        if metadata is not None and beatmap is not None:
+        if metadata_encoding is not None and beatmap_encoding is not None:
             beatmap_encoding["metadata_ids"] = metadata_encoding["input_ids"]
             return beatmap_encoding
-        elif beatmap is not None:
+        elif beatmap_encoding is not None:
             return beatmap_encoding
         else:
             return metadata_encoding
@@ -559,5 +591,6 @@ class CM3PProcessor(ProcessorMixin):
         """
         return self.tokenizer.decode(*args, **kwargs)
 
+AutoProcessor.register(CM3PConfig, CM3PBeatmapParser)
 
 __all__ = ["CM3PProcessor"]

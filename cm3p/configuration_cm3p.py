@@ -1,6 +1,7 @@
 """CM3P model configuration"""
 from typing import Literal
 
+from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
@@ -150,9 +151,11 @@ class CM3PAudioConfig(PretrainedConfig):
         reference_compile=None,
         repad_logits_with_grad=False,
 
+        projection_dim=768,
+
         sample_rate: int = 16000,
         n_ftt: int = 2048,
-        n_mels: int = 128,
+        n_mels: int = 80,
         hop_length: int = 128,
         f_min: int = 0,
         f_max: int = 8000,
@@ -191,6 +194,8 @@ class CM3PAudioConfig(PretrainedConfig):
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
 
+        self.projection_dim = projection_dim
+
         self.sample_rate = sample_rate
         self.n_ftt = n_ftt
         self.n_mels = n_mels
@@ -218,9 +223,9 @@ class CM3PBeatmapConfig(PretrainedConfig):
     def __init__(
         self,
         audio_config: CM3PAudioConfig = None,
-        audio_sos_token_id=5,
-        audio_eos_token_id=6,
-        audio_token_id=7,
+        audio_sos_token_id=831,
+        audio_eos_token_id=832,
+        audio_token_id=833,
         # stuff
         projection_dim=512,
         num_channels=3,
@@ -367,5 +372,10 @@ class CM3PConfig(PretrainedConfig):
         self.initializer_factor = initializer_factor
         self.initializer_range = initializer_range
 
+
+AutoConfig.register("cm3p_metadata_model", CM3PMetadataConfig)
+AutoConfig.register("cm3p_audio_model", CM3PAudioConfig)
+AutoConfig.register("cm3p_beatmap_model", CM3PBeatmapConfig)
+AutoConfig.register("cm3p", CM3PConfig)
 
 __all__ = ["CM3PConfig", "CM3PMetadataConfig", "CM3PAudioConfig", "CM3PBeatmapConfig"]

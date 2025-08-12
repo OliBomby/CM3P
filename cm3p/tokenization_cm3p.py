@@ -1,145 +1,214 @@
 import io
 import json
+import math
+import numpy as np
 from typing import Optional, Union
 
+import soxr
 from torch import TensorType
-from transformers import PreTrainedTokenizer, BatchEncoding
+from transformers import PreTrainedTokenizer, BatchEncoding, AutoTokenizer
 from transformers.tokenization_utils_base import TextInput, PreTokenizedInput, TruncationStrategy, \
-    PreTrainedTokenizerBase
+    PreTrainedTokenizerBase, AudioInput
 from transformers.utils import PaddingStrategy
 
+from cm3p import CM3PBeatmapConfig, CM3PMetadataConfig
+from cm3p.parsing_cm3p import Group, EventType
 
-class CM3PBeatmapTokenizer(PreTrainedTokenizerBase):
+
+class CM3PBeatmapTokenizer(PreTrainedTokenizer):
+    model_input_names: list[str] = ["input_ids", "attention_mask"]
+
     def __init__(
             self,
             vocab_file: Optional[str] = None,
-            tokenizer_config: Optional[dict] = None,
+            vocab_init: Optional[dict] = None,
+            min_time: int = 0,
+            max_time: int = 8000,
+            time_step: int = 10,
+            sampling_rate: int = 16000,
+            hop_length: int = 160,
+            audio_length_per_tok: int = 2,  # TODO Should be 8, but the audio encoder doesnt reduce enough
             **kwargs
     ):
-        if vocab_file is None and tokenizer_config is None:
-            raise ValueError("Either vocab_file or tokenizer_config must be provided.")
+        self.min_time = min_time
+        self.max_time = max_time
+        self.time_step = time_step
+        self.sampling_rate = sampling_rate
+        self.hop_length = hop_length
+        self.audio_length_per_tok = audio_length_per_tok
 
-        if tokenizer_config is not None:
-            super().__init__(
-                unk_token=tokenizer_config['unk_token'],
-                pad_token=tokenizer_config['pad_token'],
-                bos_token=tokenizer_config['bos_token'],
-                eos_token=tokenizer_config['eos_token'],
-                **kwargs
-            )
-            self.vocab = self._build_vocab_from_config(tokenizer_config)
+        self.audio_bos_token = "[AUDIO_BOS]"
+        self.audio_eos_token = "[AUDIO_EOS]"
+        self.audio_token = "[AUDIO]"
+
+        if vocab_file is None and vocab_init is None:
+            raise ValueError("Either vocab_file or vocab_init must be provided.")
+
+        if vocab_init is not None:
+            self.vocab = self._build_vocab_from_config(vocab_init)
 
         if vocab_file is not None:
             with open(vocab_file, 'r', encoding='utf-8') as f:
                 self.vocab = json.load(f)
 
         self.ids_to_tokens = {i: t for t, i in self.vocab.items()}
+        super().__init__(
+            bos_token="[BOS]",
+            eos_token="[EOS]",
+            unk_token="[UNK]",
+            sep_token="[SEP]",
+            pad_token="[PAD]",
+            cls_token="[CLS]",
+            mask_token="[MASK]",
+            additional_special_tokens=[
+                self.audio_bos_token,
+                self.audio_eos_token,
+                self.audio_token,
+            ],
+            **kwargs
+        )
 
-    def _build_vocab_from_config(self, config):
-        vocab = {}
-        idx = 0
+    def _build_vocab_from_config(self, vocab_init):
+        vocab = []
 
-        # Add special tokens first
-        for token in [config['pad_token'], config['unk_token'], config['bos_token'], config['eos_token']]:
-            vocab[token] = idx
-            idx += 1
+        # Add time tokens
+        for time in np.arange(self.min_time, self.max_time + 1e-5, self.time_step):
+            vocab.append(f"[TIME_SHIFT_{int(time)}]")
 
         # Add event type tokens
-        for event_type in config['event_types']:
-            vocab[event_type] = idx
-            idx += 1
+        for event_type in EventType:
+            vocab.append(f"[{event_type.value.upper()}]")
 
-        # Add quantized time tokens
-        for i in range(config['max_time_quanta']):
-            vocab[f"[TIME_SHIFT_{i * config['time_step_ms']}ms]"] = idx
-            idx += 1
+        return {token: idx for idx, token in enumerate(vocab)}
 
-        return vocab
+    def _tokenize_groups(
+            self,
+            groups: list[Group],
+            window_start_ms: Optional[int] = None,
+            **kwargs
+    ):
+        window_start_ms = window_start_ms or 0
+        tokens = [self.bos_token]
 
-    # You'll need to implement these methods
-    @property
-    def vocab_size(self):
-        return len(self.vocab)
-
-    def get_vocab(self):
-        return self.vocab.copy()
-
-    def _tokenize_events(self, events, **kwargs):
-        window_start_ms = kwargs.get("window_start_ms", 0)
-
-        tokens = ["[START]"]
-
-        for event in events:
+        for group in groups:
             # Calculate time delta relative to the last event
-            time_delta = event['timestamp'] - window_start_ms
+            time_delta = group.time - window_start_ms
             # Quantize time_delta into a time token
-            time_token = f"[TIME_SHIFT_{int(time_delta)}ms]"
+            time_delta = np.clip(time_delta, self.min_time, self.max_time)
+            time_delta = round(time_delta / self.time_step) * self.time_step
+            time_token = f"[TIME_SHIFT_{int(time_delta)}]"
             tokens.append(time_token)
 
             # Add the event type token
-            event_token = f"[{event['type'].upper()}]"
+            event_token = f"[{group.event_type.value.upper()}]"
             tokens.append(event_token)
 
-            last_event_ms = event['timestamp']
-
-        tokens.append("[END]")
+        tokens.append(self.eos_token)
         return tokens
+
+    def _encode_audio(self, audio: AudioInput, sampling_rate: int):
+        audio = soxr.resample(audio, sampling_rate, self.sampling_rate, quality="HQ")
+        # TODO should probably pad this to max length
+        signal_length = audio.shape[0]
+
+        # for spectrogram-based models, the waveform is downsampled by the hop_length when computing the log-mel
+        if signal_length % self.hop_length != 0:
+            signal_length = math.ceil(signal_length / self.hop_length - 1)
+        else:
+            signal_length = signal_length // self.hop_length
+
+        num_audio_tokens = math.ceil(signal_length / self.audio_length_per_tok)
+        audio_tokens = [self.audio_bos_token] + [self.audio_token] * num_audio_tokens
+        audio_token_ids = self.convert_tokens_to_ids(audio_tokens)
+
+        return audio_token_ids, audio
+
+    def _encode_single(
+            self,
+            groups: Optional[Union[list[Group]]] = None,
+            window_start_ms: Optional[int] = None,
+            audio: Optional[Union[AudioInput]] = None,
+            sampling_rate: Optional[int] = None,
+    ):
+        token_strings = self._tokenize_groups(groups, window_start_ms=window_start_ms)
+        token_ids = self.convert_tokens_to_ids(token_strings)
+
+        if audio is not None:
+            audio_token_ids, audio = self._encode_audio(audio, sampling_rate)
+            token_ids = audio_token_ids + token_ids
+
+        return token_ids, audio
 
     def __call__(
             self,
-            events: Optional[list[dict]] = None,
-            audio: Optional[Union[io.BytesIO]] = None,
-            window_start_ms: int = 0,
-            padding: bool = True,
-            truncation: bool = True,
+            groups: Optional[Union[list[Group], list[list[Group]]]] = None,
+            window_start_ms: Optional[Union[int, list[int]]] = None,
+            audio: Optional[Union[AudioInput, list[AudioInput]]] = None,
+            sampling_rate: Optional[Union[int, list[int]]] = None,
+            padding: PaddingStrategy = PaddingStrategy.LONGEST,
+            truncation: TruncationStrategy = TruncationStrategy.LONGEST_FIRST,
             max_length: Optional[int] = None,
             return_tensors: Optional[str] = "pt",
             **kwargs
     ) -> BatchEncoding:
-        token_strings = self._tokenize_events(events, window_start_ms=window_start_ms)
-        token_ids = self.convert_tokens_to_ids(token_strings)
-        return self.prepare_for_model(
-            ids=token_ids,
-            padding=padding,
-            truncation=truncation,
-            max_length=max_length,
-            return_tensors=return_tensors,
-            **kwargs,
-        )
+        if isinstance(groups, list) and all(isinstance(g, Group) for g in groups):
+            token_ids, audio = self._encode_single(
+                groups=groups,
+                window_start_ms=window_start_ms,
+                audio=audio,
+                sampling_rate=sampling_rate,
+            )
+            encoding = self.prepare_for_model(
+                token_ids,
+                padding=padding,
+                truncation=truncation,
+                max_length=max_length,
+                return_tensors=return_tensors,
+                **kwargs,
+            )
+            encoding["audio"] = audio
+        elif isinstance(groups, list):
+            if audio is None:
+                audio = [None] * len(groups)
+                sampling_rate = [None] * len(groups)
 
-    def _convert_token_to_id(self, token):
-        return self.vocab.get(token, self.vocab.get(self.unk_token))
+            if window_start_ms is None:
+                window_start_ms = [None] * len(groups)
 
-    def _convert_id_to_token(self, index):
-        return self.ids_to_tokens.get(index, self.unk_token)
+            if len(groups) != len(audio):
+                raise ValueError("Number of audio inputs must match the number of sequences.")
 
-    def _encode_audio(self, audio: Audio) -> AudioEncoding:
-        audio.resample(self.audio_config.sampling_rate)
+            if len(groups) != len(sampling_rate):
+                raise ValueError("Number of sampling rates must match the number of sequences.")
 
-        audio.audio_array = self.pad(audio.audio_array, self.audio_config.sampling_rate)
-        signal_length = audio.audio_array.shape[0]
+            if len(window_start_ms) != len(groups):
+                raise ValueError("Number of window start times must match the number of sequences.")
 
-        # for spectrogram-based models, the waveform is downsampled by the hop_length when computing the log-mel
-        if signal_length % self.encoding_config.hop_length != 0:
-            signal_length = math.ceil(signal_length / self.encoding_config.hop_length - 1)
+            all_token_ids = []
+            all_audio = []
+            for g, w, a, s in zip(groups, window_start_ms, audio, sampling_rate):
+                token_ids, audio = self._encode_single(
+                    groups=g,
+                    window_start_ms=w,
+                    audio=a,
+                    sampling_rate=s,
+                )
+                all_token_ids.append((token_ids, None))
+                all_audio.append(audio)
+
+            encoding = self._batch_prepare_for_model(
+                all_token_ids,
+                padding_strategy=padding,
+                truncation_strategy=truncation,
+                max_length=max_length,
+                return_tensors=return_tensors,
+                **kwargs,
+            )
+            encoding["audio"] = all_audio
         else:
-            signal_length = signal_length // self.encoding_config.hop_length
+            raise ValueError("Input must be a list of Group objects or a single Group object.")
 
-        num_audio_tokens = math.ceil(signal_length / self.audio_config.audio_length_per_tok)
-        audio_tokens = [self.begin_audio_token] + [self.audio_token] * num_audio_tokens
-
-        return AudioEncoding(
-            tokens=audio_tokens,
-            audio=audio,
-        )
-
-
-class CM3PMetadataTokenizer(PreTrainedTokenizer):
-    def __init__(self, vocab_file, **kwargs):
-        super().__init__(**kwargs)
-        with open(vocab_file, 'r', encoding='utf-8') as f:
-            self.vocab = json.load(f)
-        self.ids_to_tokens = {i: t for t, i in self.vocab.items()}
+        return encoding
 
     @property
     def vocab_size(self):
@@ -148,14 +217,169 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
     def get_vocab(self):
         return self.vocab.copy()
 
-    def _tokenize(self, metadata):
-        # Your logic to convert metadata into tokens
-        tokens = []
-        # ... your conversion logic here ...
+    def _convert_token_to_id(self, token):
+        return self.vocab.get(token, self.vocab.get(self.unk_token))
+
+    def _convert_id_to_token(self, index):
+        return self.ids_to_tokens.get(index, self.unk_token)
+
+
+class CM3PMetadataTokenizer(PreTrainedTokenizer):
+    model_input_names: list[str] = ["input_ids"]
+
+    def __init__(
+            self,
+            vocab_file: Optional[str] = None,
+            vocab_init: Optional[dict] = None,
+            min_difficculty: float = 0.0,
+            max_difficulty: float = 10.0,
+            difficulty_step: float = 0.1,
+            min_year: int = 2000,
+            max_year: int = 2030,
+            **kwargs
+    ):
+        self.min_difficulty = min_difficculty
+        self.max_difficulty = max_difficulty
+        self.difficulty_step = difficulty_step
+        self.min_year = min_year
+        self.max_year = max_year
+
+        self.difficulty_unk_token = "[DIFFICULTY_UNK]"
+        self.year_unk_token = "[YEAR_UNK]"
+        self.mode_unk_token = "[MODE_UNK]"
+        self.mapper_unk_token = "[MAPPER_UNK]"
+
+        if vocab_file is None and vocab_init is None:
+            raise ValueError("Either vocab_file or vocab_init must be provided.")
+
+        if vocab_init is not None:
+            self.vocab = self._build_vocab_from_config(vocab_init)
+
+        if vocab_file is not None:
+            with open(vocab_file, 'r', encoding='utf-8') as f:
+                self.vocab = json.load(f)
+
+        self.ids_to_tokens = {i: t for t, i in self.vocab.items()}
+        super().__init__(
+            bos_token="[BOS]",
+            eos_token="[EOS]",
+            pad_token="[PAD]",
+            additional_special_tokens=[
+                self.difficulty_unk_token,
+                self.year_unk_token,
+                self.mode_unk_token,
+                self.mapper_unk_token,
+            ],
+            **kwargs
+        )
+
+    def _build_vocab_from_config(self, vocab_init):
+        vocab = []
+
+        for difficulty in np.arange(
+                self.min_difficulty, self.max_difficulty + 1e-5, self.difficulty_step
+        ):
+            vocab.append(f"[DIFFICULTY_{difficulty:.1f}]")
+
+        for year in range(self.min_year, self.max_year + 1):
+            vocab.append(f"[YEAR_{year}]")
+
+        for mode in vocab_init.get('modes', []):
+            vocab.append(f"[MODE_{str(mode).upper()}]")
+
+        for mapper in vocab_init.get('mappers', []):
+            vocab.append(f"[MAPPER_{mapper}]")
+
+        return {token: idx for idx, token in enumerate(vocab)}
+
+    def _tokenize_diffulty(self, metadata):
+        difficulty = metadata.get('difficulty', None)
+        if difficulty is None:
+            return self.difficulty_unk_token
+        difficulty = np.clip(difficulty, self.min_difficulty, self.max_difficulty)
+        difficulty = round(difficulty / self.difficulty_step) * self.difficulty_step
+        return f"[DIFFICULTY_{difficulty:.1f}]"
+
+    def _tokenize_year(self, metadata):
+        year = metadata.get('year', None)
+        if year is None:
+            return self.year_unk_token
+        year = np.clip(year, self.min_year, self.max_year)
+        return f"[YEAR_{year}]"
+
+    def _tokenize_mode(self, metadata):
+        mode = metadata.get('mode', None)
+        if mode is None:
+            return self.mode_unk_token
+        mode = str(mode).upper()
+        return f"[MODE_{mode}]"
+
+    def _tokenize_mapper(self, metadata):
+        mapper = metadata.get('mapper', None)
+        if mapper is None:
+            return self.mapper_unk_token
+        return f"[MAPPER_{mapper}]"
+
+    def _tokenize_metadata(self, metadata):
+        tokens = [
+            self.bos_token,
+            self._tokenize_diffulty(metadata),
+            self._tokenize_year(metadata),
+            self._tokenize_mode(metadata),
+            self._tokenize_mapper(metadata),
+            self.eos_token
+        ]
         return tokens
+
+    def __call__(
+            self,
+            metadata: Optional[Union[dict, list[dict]]] = None,
+            padding_strategy: PaddingStrategy = PaddingStrategy.LONGEST,
+            truncation_strategy: TruncationStrategy = TruncationStrategy.DO_NOT_TRUNCATE,
+            max_length: Optional[int] = None,
+            return_tensors: Optional[str] = "pt",
+            **kwargs
+    ) -> BatchEncoding:
+        if isinstance(metadata, dict):
+            token_strings = self._tokenize_metadata(metadata)
+            token_ids = self.convert_tokens_to_ids(token_strings)
+            return self.prepare_for_model(
+                token_ids,
+                padding=padding_strategy,
+                truncation=truncation_strategy,
+                max_length=max_length,
+                return_tensors=return_tensors,
+                **kwargs,
+            )
+        elif isinstance(metadata, list):
+            all_token_ids = []
+            for m in metadata:
+                token_strings = self._tokenize_metadata(m)
+                token_ids = self.convert_tokens_to_ids(token_strings)
+                all_token_ids.append((token_ids, None))
+
+            return self._batch_prepare_for_model(
+                all_token_ids,
+                padding_strategy=padding_strategy,
+                truncation_strategy=truncation_strategy,
+                max_length=max_length,
+                return_tensors=return_tensors,
+            )
+
+    @property
+    def vocab_size(self):
+        return len(self.vocab)
+
+    def get_vocab(self):
+        return self.vocab.copy()
 
     def _convert_token_to_id(self, token):
         return self.vocab.get(token, self.vocab.get(self.unk_token))
 
     def _convert_id_to_token(self, index):
         return self.ids_to_tokens.get(index, self.unk_token)
+
+AutoTokenizer.register(CM3PBeatmapConfig, CM3PBeatmapTokenizer)
+AutoTokenizer.register(CM3PMetadataConfig, CM3PMetadataTokenizer)
+
+__all__ = ["CM3PBeatmapTokenizer", "CM3PMetadataTokenizer"]

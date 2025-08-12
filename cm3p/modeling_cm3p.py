@@ -7,7 +7,7 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from transformers import ModernBertModel
+from transformers import ModernBertModel, AutoModel, AutoModelForSequenceClassification
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -76,6 +76,21 @@ class BeatmapClassifierOutput(ModelOutput):
 @dataclass
 @auto_docstring(
     custom_intro="""
+    Base class for audio model's outputs that also contains a pooling of the last hidden states.
+    """
+)
+class CM3PAudioModelOutput(BaseModelOutput):
+    r"""
+    audio_embeds (`torch.FloatTensor` of shape `(batch_size * sequence_length, output_dim)` *optional* returned when model is initialized with `with_projection=True`):
+        The audio embeddings obtained by applying the projection layer to the last hidden state.
+    """
+
+    audio_embeds: Optional[torch.FloatTensor] = None
+
+
+@dataclass
+@auto_docstring(
+    custom_intro="""
     Base class for beatmap model's outputs that also contains beatmap embeddings of the pooling of the last hidden states.
     """
 )
@@ -88,7 +103,7 @@ class CM3PBeatmapModelOutput(BaseModelOutputWithPooling):
     """
 
     beatmap_embeds: Optional[torch.FloatTensor] = None
-    audio_model_output: BaseModelOutput = None
+    audio_model_output: CM3PAudioModelOutput = None
 
 
 @dataclass
@@ -270,17 +285,18 @@ class CM3PAudioEncoder(nn.Module):
         self.conv1 = nn.Conv1d(config.n_mels, config.hidden_size, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(config.hidden_size, config.hidden_size, kernel_size=3, stride=2, padding=1)
         self.encoder = ModernBertModel(config)
+        self.projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
 
     def forward(
             self,
             input_features: torch.FloatTensor,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
-    ) -> torch.tensor:
+    ) -> CM3PAudioModelOutput:
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
 
-        inputs_embeds = inputs_embeds.permute(0, 2, 1)
+        inputs_embeds = inputs_embeds.permute(0, 2, 1).contiguous()
 
         position_ids = torch.arange(inputs_embeds.size(1), device=inputs_embeds.device).unsqueeze(0).repeat(
             inputs_embeds.size(0), 1)
@@ -292,7 +308,18 @@ class CM3PAudioEncoder(nn.Module):
             output_hidden_states=output_hidden_states,
         )
 
-        return encoder_outputs
+        last_hidden_state = encoder_outputs.last_hidden_state
+        audio_embeds = self.projection(last_hidden_state)
+        audio_embeds = audio_embeds.reshape(-1, self.config.projection_dim)
+
+        audio_outputs = CM3PAudioModelOutput(
+            last_hidden_state=last_hidden_state,
+            audio_embeds=audio_embeds,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+        )
+
+        return audio_outputs
 
 
 class CM3PBeatmapTransformer(nn.Module):
@@ -329,7 +356,7 @@ class CM3PBeatmapTransformer(nn.Module):
 
         audio_model_outputs = None
         if input_features is not None:
-            audio_model_outputs = self.audio_encoder(
+            audio_model_outputs: CM3PAudioModelOutput = self.audio_encoder(
                 input_features=input_features,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
@@ -337,7 +364,7 @@ class CM3PBeatmapTransformer(nn.Module):
 
             # replace text-audio token placeholders with audio embeddings
             audio_token_mask = input_ids == self.config.audio_token_id
-            inputs_embeds[audio_token_mask] = audio_model_outputs.last_hidden_state
+            inputs_embeds[audio_token_mask] = audio_model_outputs.audio_embeds
 
         encoder_outputs: BaseModelOutput = self.encoder(
             inputs_embeds=inputs_embeds,
@@ -716,7 +743,9 @@ class CM3PBeatmapModelWithProjection(CM3PPreTrainedModel):
     """
 )
 class CM3PForBeatmapClassification(CM3PPreTrainedModel):
-    def __init__(self, config: CM3PConfig) -> None:
+    config_class = CM3PBeatmapConfig
+
+    def __init__(self, config: CM3PBeatmapConfig) -> None:
         super().__init__(config)
 
         self.num_labels = config.num_labels
@@ -803,6 +832,10 @@ class CM3PForBeatmapClassification(CM3PPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+AutoModel.register(CM3PMetadataConfig, CM3PMetadataModel)
+AutoModel.register(CM3PBeatmapConfig, CM3PBeatmapModel)
+AutoModel.register(CM3PConfig, CM3PModel)
+AutoModelForSequenceClassification.register(CM3PBeatmapConfig, CM3PForBeatmapClassification)
 
 __all__ = [
     "CM3PModel",

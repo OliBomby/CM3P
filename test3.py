@@ -4,13 +4,44 @@ from transformers.tokenization_mistral_common import MistralCommonTokenizer
 
 from cm3p import CM3PConfig
 from cm3p.modeling_cm3p import CM3PModel
+from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
+from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+test_beatmap_tokenizer_config = {
+    "event_types": [
+        "hitcircle",
+        "slider",
+        "spinner",
+    ],
+}
+
+test_metadata_tokenizer_config = {
+    "modes": [
+        "osu",
+        "taiko",
+        "fruits",
+        "mania",
+    ],
+    "mappers": [
+        "OliBomby",
+        "Cookiezi",
+        "peppy",
+        "Xenon",
+    ],
+}
+
 config = CM3PConfig()
 model = CM3PModel._from_config(config, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
-processor = CM3PProcessor(WhisperFeatureExtractor(), MistralCommonTokenizer(""))
+model = model.to(device)
+processor = CM3PProcessor(
+    WhisperFeatureExtractor(),
+    CM3PBeatmapParser(),
+    CM3PBeatmapTokenizer(vocab_init=test_beatmap_tokenizer_config),
+    CM3PMetadataTokenizer(vocab_init=test_metadata_tokenizer_config),
+)
 
 # print(model)
 # print(model.config)
@@ -27,8 +58,8 @@ processor = CM3PProcessor(WhisperFeatureExtractor(), MistralCommonTokenizer(""))
 # print_parameters(model.beatmap_model.audio_encoder)
 # print_parameters(model.metadata_model)
 
-url = "beatmap_audio_example.mp3"
-beatmap = "beatmap_example.osu"
+audio = r"resources/audio.mp3"
+beatmap = r"resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"
 labels = [
     {"difficulty": 1.5, "mode": "osu", "mapper": "OliBomby", "year": 2020},
     {"difficulty": 3.0, "mode": "taiko", "mapper": "Cookiezi", "year": 2018},
@@ -36,11 +67,13 @@ labels = [
     {"difficulty": 7.0, "mode": "mania", "mapper": "Xenon", "year": 2019},
 ]
 
-inputs = processor(metadata=labels, beatmap=beatmap, audio=url, return_tensors="pt", padding=True)
+inputs = processor(metadata=labels, beatmap=beatmap, audio=audio, return_tensors="pt")
+inputs = inputs.to(device, dtype=torch.bfloat16)
 
 outputs = model(**inputs)
 logits_per_beatmap = outputs.logits_per_beatmap
-probs = logits_per_beatmap.softmax(dim=1)
-most_likely_idx = probs.argmax(dim=1).item()
-most_likely_label = labels[most_likely_idx]
-print(f"Most likely label: {most_likely_label} with probability: {probs[0][most_likely_idx].item():.3f}")
+probs = logits_per_beatmap.softmax(dim=1).cpu()
+for prob in probs:
+    most_likely_idx = prob.argmax().item()
+    most_likely_label = labels[most_likely_idx]
+    print(f"Most likely label: {most_likely_label} with probability: {prob[most_likely_idx].item():.3f}")

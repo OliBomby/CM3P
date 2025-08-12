@@ -70,9 +70,11 @@ labels = [
 inputs = processor(metadata=labels, beatmap=beatmap, audio=audio, return_tensors="pt")
 inputs = inputs.to(device, dtype=torch.bfloat16)
 
-outputs = model(**inputs)
-logits_per_beatmap = outputs.logits_per_beatmap
-probs = logits_per_beatmap.softmax(dim=1).cpu()
+with torch.no_grad():
+    outputs = model(**inputs)
+    logits_per_beatmap = outputs.logits_per_beatmap
+    probs = logits_per_beatmap.softmax(dim=1).cpu()
+
 for prob in probs:
     most_likely_idx = prob.argmax().item()
     most_likely_label = labels[most_likely_idx]

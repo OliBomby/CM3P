@@ -1,16 +1,13 @@
 import io
 import itertools
-import pathlib
-import warnings
-from fileinput import FileInput
 from os import PathLike
 from typing import Optional, Union, IO
 
 import numpy as np
+from accelerate import logging
 from slider import Beatmap
-from transformers import WhisperFeatureExtractor, BatchEncoding, AutoProcessor
-from transformers.utils import is_mistral_common_available, is_soundfile_available, is_torch_available, logging, \
-    PaddingStrategy
+from transformers import WhisperFeatureExtractor, AutoProcessor
+from transformers.utils import is_soundfile_available, is_torch_available, PaddingStrategy
 
 from cm3p import CM3PConfig
 from cm3p.parsing_cm3p import CM3PBeatmapParser
@@ -22,13 +19,9 @@ if is_torch_available():
 if is_soundfile_available():
     import soundfile as sf
 
-if is_mistral_common_available():
-    from mistral_common.protocol.transcription.request import TranscriptionRequest
-
 from transformers.audio_utils import AudioInput, load_audio_as, make_list_of_audio
 from transformers.feature_extraction_utils import BatchFeature
-from transformers.processing_utils import AllKwargsForChatTemplate, AudioKwargs, ProcessingKwargs, ProcessorMixin, Unpack
-
+from transformers.processing_utils import AudioKwargs, ProcessingKwargs, ProcessorMixin
 
 logger = logging.get_logger(__name__)
 
@@ -91,6 +84,10 @@ class CM3PProcessor(ProcessorMixin):
         metadata_tokenizer: CM3PMetadataTokenizer,
         window_length: float = 30.0,
     ):
+        self.audio_feature_extractor = audio_feature_extractor
+        self.beatmap_parser = beatmap_parser
+        self.beatmap_tokenizer = beatmap_tokenizer
+        self.metadata_tokenizer = metadata_tokenizer
         self.audio_token = beatmap_tokenizer.audio_token
         self.window_length = window_length
 
@@ -113,138 +110,12 @@ class CM3PProcessor(ProcessorMixin):
 
         return torch.cat(input_features_list)
 
-    def apply_chat_template(
-        self,
-        conversation: Union[list[dict[str, str]], list[list[dict[str, str]]]],
-        **kwargs: Unpack[AllKwargsForChatTemplate],
-    ) -> str:
-        """
-        This method applies the model's chat completion template given a conversation. It relies on MistralCommonTokenizer's
-        [`~MistralCommonTokenizer.apply_chat_template`] to prepare input ids to the model and on WhisperFeatureExtractor's
-        [`~WhisperFeatureExtractor.__call__`] to prepare input features to the model.
-
-        Note that audio is padded to the nearest 30-second multiple prior to mel feature extraction.
-
-        A `conversation` is a list of messages, where each message is a dictionary with a `role` and a `content` field.
-        For CM3P, `role` can be `"user"` or `"assistant"`.
-        The `content` field can be a string or a list of dictionaries with a `type` field. See example below.
-
-        ```python
-        from huggingface_hub import hf_hub_download
-        from transformers.audio_utils import load_audio_as
-
-        audio_url = "https://huggingface.co/datasets/hf-internal-testing/dummy-audio-samples/resolve/main/bcn_weather.mp3"
-        audio_path = hf_hub_download(repo_id="hf-internal-testing/dummy-audio-samples", filename="bcn_weather.mp3", repo_type="dataset")
-        audio_base64 = load_audio_as(audio_path, return_format="base64", force_mono=True)
-
-        # audio + text
-        conversation = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "audio", "url": audio_url},
-                    {"type": "audio", "path": audio_path},
-                    {"type": "audio", "base64": audio_base64},
-                    {"type": "text", "text": "How many audio do you hear?"},
-                ],
-            },
-        ]
-
-        processor = CM3PProcessor.from_pretrained("mistralai/CM3P-Mini-3B-2507")
-        inputs = processor.apply_chat_template(conversation)
-        ```
-
-        Args:
-            conversation (`Union[list[Dict, [str, str]], list[list[dict[str, str]]]]`):
-                The conversation to format.
-        """
-        if kwargs.get("continue_final_message", False):
-            if kwargs.get("add_generation_prompt", False):
-                raise ValueError(
-                    "continue_final_message and add_generation_prompt are not compatible. Use continue_final_message when you want the model to continue the final message, and add_generation_prompt when you want to add a header that will prompt it to start a new assistant message instead."
-                )
-            if kwargs.get("return_assistant_tokens_mask", False):
-                raise ValueError("continue_final_message is not compatible with return_assistant_tokens_mask.")
-
-        # Fill sets of kwargs that should be used by different parts of template
-        processed_kwargs = {
-            "mm_load_kwargs": {},
-            "template_kwargs": {},
-        }
-
-        for kwarg_type in processed_kwargs:
-            for key in AllKwargsForChatTemplate.__annotations__[kwarg_type].__annotations__:
-                kwarg_type_defaults = AllKwargsForChatTemplate.__annotations__[kwarg_type]
-                default_value = getattr(kwarg_type_defaults, key, None)
-                value = kwargs.pop(key, default_value)
-                if value is not None and not isinstance(value, dict):
-                    processed_kwargs[kwarg_type][key] = value
-
-        # Pass unprocessed custom kwargs
-        processed_kwargs["template_kwargs"].update(kwargs)
-
-        if isinstance(conversation, (list, tuple)) and (
-            isinstance(conversation[0], (list, tuple)) or hasattr(conversation[0], "content")
-        ):
-            is_batched = True
-            conversations = conversation
-        else:
-            is_batched = False
-            conversations = [conversation]
-
-        # Check for any overlapping keys between mm_load_kwargs and kwargs
-        mm_load_kwargs = processed_kwargs["mm_load_kwargs"]
-        if any(key in kwargs for key in mm_load_kwargs):
-            overlapping_keys = [key for key in mm_load_kwargs if key in kwargs]
-            logger.warning(
-                f"{overlapping_keys[0] if len(overlapping_keys) == 1 else ', '.join(overlapping_keys)} load multimodal data kwarg{'s' if len(overlapping_keys) > 1 else ''} {'have' if len(overlapping_keys) > 1 else 'has'} been passed to the processor, but {'they are' if len(overlapping_keys) > 1 else 'it is'} not supported for CM3PProcessor since it relies on mistral_common directly. {'They' if len(overlapping_keys) > 1 else 'It'} will be ignored."
-            )
-
-        output_kwargs = self._merge_kwargs(
-            CM3PProcessorKwargs,
-            **kwargs,
-        )
-        text_kwargs = output_kwargs["text_kwargs"]
-        audio_kwargs = output_kwargs["audio_kwargs"]
-        common_kwargs = output_kwargs["common_kwargs"]
-
-        return_tensors = common_kwargs.pop("return_tensors", None)
-        if return_tensors != "pt":
-            raise ValueError(f"{self.__class__.__name__} only supports `return_tensors='pt'`.")
-
-        tokenizer_kwargs = {**processed_kwargs["template_kwargs"], **text_kwargs}
-        tokenizer_kwargs["return_tensors"] = None  # let's not return tensors here
-        tokenize = tokenizer_kwargs.pop("tokenize", False)
-        return_dict = tokenizer_kwargs.pop("return_dict", False)
-
-        encoded_instruct_inputs = self.tokenizer.apply_chat_template(
-            conversations,
-            tokenize=tokenize,
-            return_dict=return_dict,
-            **tokenizer_kwargs,
-        )
-
-        if tokenize:
-            if return_dict:
-                audio = encoded_instruct_inputs.pop("audio", None)
-                data = dict(encoded_instruct_inputs)
-                if audio is not None:
-                    max_source_positions = audio_kwargs.pop("max_source_positions")
-                    data["input_features"] = self._retrieve_input_features(audio, max_source_positions, **audio_kwargs)
-
-                return BatchFeature(data=data, tensor_type=return_tensors)
-
-        if not is_batched:
-            return encoded_instruct_inputs[0]
-
-        return encoded_instruct_inputs
-
     def _load_audio(
         self,
         audio_kwargs: CM3PAudioKwargs,
         audio: Union[str, list[str], AudioInput],
         sampling_rate: Optional[int] = None,
-        format: Optional[Union[str, list[str]]] = None,
+        audio_format: Optional[Union[str, list[str]]] = None,
     ) -> list[io.BytesIO]:
         """
         Helper method to load audio from various formats and return a list of audio buffers.
@@ -275,12 +146,12 @@ class CM3PProcessor(ProcessorMixin):
             ]
         else:
             audio = make_list_of_audio(audio)
-            if len(audio) != len(format):
+            if len(audio) != len(audio_format):
                 raise ValueError(
-                    f"When passed as a list of audio, the length ({len(audio)}) must match the number of format ({len(format)})"
+                    f"When passed as a list of audio, the length ({len(audio)}) must match the number of format ({len(audio_format)})"
                 )
             audio_buffers = []
-            for array, f in zip(audio, format):
+            for array, f in zip(audio, audio_format):
                 # Create new BytesIO object and write audio data to it
                 buffer = io.BytesIO()
                 # Convert to mono if needed
@@ -300,7 +171,7 @@ class CM3PProcessor(ProcessorMixin):
         beatmap: Optional[Union[str, list[str], PathLike, list[PathLike], IO[str], list[IO[str]], Beatmap, list[Beatmap]]] = None,
         audio: Optional[Union[str, list[str], AudioInput]] = None,
         sampling_rate: Optional[int] = None,
-        format: Optional[Union[str, list[str]]] = None,
+        audio_format: Optional[Union[str, list[str]]] = None,
         **kwargs,
     ):
         output_kwargs = self._merge_kwargs(
@@ -333,7 +204,7 @@ class CM3PProcessor(ProcessorMixin):
                 audio_kwargs,
                 audio,
                 sampling_rate=sampling_rate,
-                format=format,
+                audio_format=audio_format,
             )
 
         if beatmap is not None:
@@ -418,178 +289,19 @@ class CM3PProcessor(ProcessorMixin):
         else:
             return metadata_encoding
 
-    # TODO: @eustlb, this should be moved to mistral_common + testing
-    def apply_transcription_request(
-        self,
-        language: Union[str, list[str]],
-        audio: Union[str, list[str], AudioInput],
-        model_id: str,
-        sampling_rate: Optional[int] = None,
-        format: Optional[Union[str, list[str]]] = None,
-        **kwargs: Unpack[CM3PProcessorKwargs],
-    ):
-        """
-        This method applies the model's transcription request template given a language and audio.
-        It relies on MistralCommonTokenizer and WhisperFeatureExtractor to prepare input ids and input features to the model.
-
-        ```python
-        from transformers import CM3PProcessor
-
-        model_id = "mistralai/CM3P-Mini-3B-2507"
-        processor = CM3PProcessor.from_pretrained(model_id)
-
-        language = "en"
-        audio = "https://huggingface.co/datasets/hf-internal-testing/dummy-audio-samples/resolve/main/obama.mp3"
-
-        inputs = processor.apply_transcription_request(language=language, audio=audio, model_id=model_id)
-        ```
-
-        Args:
-            language (`str`, `list[str]`):
-                The language or languages of the audio. If provided as a string, will be applied uniformly to all audio.
-                If provided as a list, will be applied to each audio individually with a one-to-one mapping.
-            audio (`str`, `list[str]`, `np.ndarray`, `torch.Tensor`, `list[np.ndarray]`, `list[torch.Tensor]`):
-                The audio or batch of audio to be prepared. If provided as a string, it should correspond to the path or url of the audio file.
-            model_id (`str`:
-                The hub model id of the model to use for transcription.
-            sampling_rate (`int`, *optional*):
-                The sampling rate of the audio. Necessary if it is provided as `np.ndarray`, `torch.Tensor`, `list[np.ndarray]`, `list[torch.Tensor]`.
-                Used to avoid silent errors when passing audio that is not in the expected sampling rate.
-            format (`str`, `list[str]`, *optional*):
-                The format of the audio, necessary if is provided as `np.ndarray`, `torch.Tensor`, `list[np.ndarray]`, `list[torch.Tensor]`.
-        """
-        output_kwargs = self._merge_kwargs(
-            CM3PProcessorKwargs,
-            **kwargs,
-        )
-        text_kwargs = output_kwargs["text_kwargs"]
-        audio_kwargs = output_kwargs["audio_kwargs"]
-        common_kwargs = output_kwargs["common_kwargs"]
-
-        is_str = isinstance(audio, str)
-        is_list_of_str = all(isinstance(el, str) for el in audio)
-        is_list_of_audio = not (is_str or is_list_of_str)
-
-        if is_list_of_audio:
-            if sampling_rate is None:
-                logger.warning_once(
-                    f"You've provided audio without specifying the sampling rate. It will be assumed to be {audio_kwargs['sampling_rate']}, which can result in silent errors."
-                )
-            elif sampling_rate != audio_kwargs["sampling_rate"]:
-                raise ValueError(
-                    f"The sampling rate of the audio ({sampling_rate}) does not match the sampling rate of the processor ({audio_kwargs['sampling_rate']}). Please provide resampled the audio to the expected sampling rate."
-                )
-
-        sampling_rate = audio_kwargs["sampling_rate"]
-        return_dict = common_kwargs.pop("return_dict", False)
-        tokenize = common_kwargs.pop("tokenize", False)
-
-        # make sure to remove from text_kwargs and audio_kwargs
-        for k in ("return_dict", "tokenize"):
-            text_kwargs.pop(k, None)
-            audio_kwargs.pop(k, None)
-
-        return_tensors = common_kwargs.pop("return_tensors", None)
-        if return_tensors != "pt":
-            raise ValueError(f"{self.__class__.__name__} only supports `return_tensors='pt'`.")
-
-        # validate audio input
-        if is_str:
-            audio = [load_audio_as(audio, return_format="buffer", force_mono=True, sampling_rate=sampling_rate)]
-        elif is_list_of_str:
-            audio = [
-                load_audio_as(el, return_format="buffer", force_mono=True, sampling_rate=sampling_rate) for el in audio
-            ]
-        else:
-            audio = make_list_of_audio(audio)
-            if len(audio) != len(format):
-                raise ValueError(
-                    f"When passed as a list of audio, the length ({len(audio)}) must match the number of format ({len(format)})"
-                )
-            audio_buffers = []
-            for array, f in zip(audio, format):
-                # Create new BytesIO object and write audio data to it
-                buffer = io.BytesIO()
-                # Convert to mono if needed
-                if array.ndim == 2:
-                    array = array.mean(axis=1)
-                # Write to buffer with default format and sampling rate
-                sf.write(buffer, array, samplerate=audio_kwargs["sampling_rate"], format=f)
-                buffer.seek(0)
-                audio_buffers.append(buffer)
-            audio = audio_buffers
-
-        # validate language input
-        n_audio = len(audio)
-        if isinstance(language, str):
-            language = [language] * n_audio
-
-        if len(language) != n_audio:
-            raise ValueError(
-                f"When passed as a list of languages, the length ({len(language)}) must match the number of audio ({n_audio})"
-            )
-
-        input_ids = []
-        texts = []
-        audio_arrays = []
-        for audio_el, language_el in zip(audio, language):
-            openai_transcription_request = {
-                "model": model_id,
-                "file": audio_el,
-                "language": language_el,
-            }
-
-            transcription_request = TranscriptionRequest.from_openai(openai_transcription_request)
-            tokenized_transcription_request = self.tokenizer.tokenizer.encode_transcription(transcription_request)
-
-            input_ids.append(tokenized_transcription_request.tokens)
-            texts.append(tokenized_transcription_request.text)
-            audio_arrays.extend([el.audio_array for el in tokenized_transcription_request.audios])
-
-        if tokenize:
-            if return_dict:
-                # text are already tokenized but we need to pad etc
-                encoding = self.tokenizer(
-                    input_ids,
-                    add_special_tokens=False,
-                    **text_kwargs,
-                )
-                data = dict(encoding)
-
-                # extract the input features
-                max_source_positions = audio_kwargs.pop("max_source_positions")
-                data["input_features"] = self._retrieve_input_features(
-                    audio_arrays, max_source_positions, **audio_kwargs
-                )
-
-                return BatchFeature(data=data, tensor_type=return_tensors)
-
-        return texts
-
-    # Deprecated typo'd method for backward compatibility
-    def apply_transcrition_request(self, *args, **kwargs):
-        """
-        Deprecated typo'd method. Use `apply_transcription_request` instead.
-        """
-        warnings.warn(
-            "`apply_transcrition_request` is deprecated due to a typo and will be removed in a future release. Please use `apply_transcription_request` instead.",
-            FutureWarning,
-        )
-        return self.apply_transcription_request(*args, **kwargs)
-
     def batch_decode(self, *args, **kwargs):
         """
-        This method forwards all its arguments to MistralCommonTokenizer's [`~MistralCommonTokenizer.batch_decode`]. Please
+        This method forwards all its arguments to CM3PBeatmapTokenizer's [`~CM3PBeatmapTokenizer.batch_decode`]. Please
         refer to the docstring of this method for more information.
         """
-        return self.tokenizer.batch_decode(*args, **kwargs)
+        return self.beatmap_tokenizer.batch_decode(*args, **kwargs)
 
     def decode(self, *args, **kwargs):
         """
-        This method forwards all its arguments to MistralCommonTokenizer's [`~MistralCommonTokenizer.decode`]. Please refer to
+        This method forwards all its arguments to CM3PBeatmapTokenizer's [`~CM3PBeatmapTokenizer.decode`]. Please refer to
         the docstring of this method for more information.
         """
-        return self.tokenizer.decode(*args, **kwargs)
+        return self.beatmap_tokenizer.decode(*args, **kwargs)
 
 AutoProcessor.register(CM3PConfig, CM3PBeatmapParser)
 

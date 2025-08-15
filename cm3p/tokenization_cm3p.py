@@ -1,14 +1,9 @@
-import io
 import json
-import math
-import numpy as np
 from typing import Optional, Union
 
-import soxr
-from torch import TensorType
+import numpy as np
 from transformers import PreTrainedTokenizer, BatchEncoding, AutoTokenizer
-from transformers.tokenization_utils_base import TextInput, PreTokenizedInput, TruncationStrategy, \
-    PreTrainedTokenizerBase, AudioInput
+from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import PaddingStrategy
 
 from cm3p import CM3PBeatmapConfig, CM3PMetadataConfig
@@ -25,17 +20,11 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             min_time: int = 0,
             max_time: int = 8000,
             time_step: int = 10,
-            sampling_rate: int = 16000,
-            hop_length: int = 160,
-            audio_length_per_tok: int = 2,  # TODO Should be 8, but the audio encoder doesnt reduce enough
             **kwargs
     ):
         self.min_time = min_time
         self.max_time = max_time
         self.time_step = time_step
-        self.sampling_rate = sampling_rate
-        self.hop_length = hop_length
-        self.audio_length_per_tok = audio_length_per_tok
 
         self.audio_bos_token = "[AUDIO_BOS]"
         self.audio_eos_token = "[AUDIO_EOS]"
@@ -106,105 +95,70 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         tokens.append(self.eos_token)
         return tokens
 
-    def _encode_audio(self, audio: AudioInput, sampling_rate: int):
-        audio = soxr.resample(audio, sampling_rate, self.sampling_rate, quality="HQ")
-        # TODO should probably pad this to max length
-        signal_length = audio.shape[0]
-
-        # for spectrogram-based models, the waveform is downsampled by the hop_length when computing the log-mel
-        if signal_length % self.hop_length != 0:
-            signal_length = math.ceil(signal_length / self.hop_length - 1)
-        else:
-            signal_length = signal_length // self.hop_length
-
-        num_audio_tokens = math.ceil(signal_length / self.audio_length_per_tok)
-        audio_tokens = [self.audio_bos_token] + [self.audio_token] * num_audio_tokens
-        audio_token_ids = self.convert_tokens_to_ids(audio_tokens)
-
-        return audio_token_ids, audio
-
     def _encode_single(
             self,
             groups: Optional[Union[list[Group]]] = None,
             window_start_ms: Optional[int] = None,
-            audio: Optional[Union[AudioInput]] = None,
-            sampling_rate: Optional[int] = None,
+            num_audio_tokens: Optional[int] = None,
     ):
         token_strings = self._tokenize_groups(groups, window_start_ms=window_start_ms)
         token_ids = self.convert_tokens_to_ids(token_strings)
 
-        if audio is not None:
-            audio_token_ids, audio = self._encode_audio(audio, sampling_rate)
-            token_ids = audio_token_ids + token_ids
+        if num_audio_tokens is not None and num_audio_tokens > 0:
+            audio_tokens = [self.audio_bos_token] + [self.audio_token] * num_audio_tokens + [self.audio_eos_token]
+            token_ids = self.convert_tokens_to_ids(audio_tokens) + token_ids
 
-        return token_ids, audio
+        return token_ids
 
     def __call__(
             self,
             groups: Optional[Union[list[Group], list[list[Group]]]] = None,
             window_start_ms: Optional[Union[int, list[int]]] = None,
-            audio: Optional[Union[AudioInput, list[AudioInput]]] = None,
-            sampling_rate: Optional[Union[int, list[int]]] = None,
+            num_audio_tokens: Optional[Union[int, list[int]]] = None,
             padding: PaddingStrategy = PaddingStrategy.LONGEST,
             truncation: TruncationStrategy = TruncationStrategy.LONGEST_FIRST,
-            max_length: Optional[int] = None,
-            return_tensors: Optional[str] = "pt",
             **kwargs
     ) -> BatchEncoding:
         if isinstance(groups, list) and all(isinstance(g, Group) for g in groups):
-            token_ids, audio = self._encode_single(
+            token_ids = self._encode_single(
                 groups=groups,
                 window_start_ms=window_start_ms,
-                audio=audio,
-                sampling_rate=sampling_rate,
+                num_audio_tokens=num_audio_tokens,
             )
             encoding = self.prepare_for_model(
                 token_ids,
                 padding=padding,
                 truncation=truncation,
-                max_length=max_length,
-                return_tensors=return_tensors,
                 **kwargs,
             )
-            encoding["audio"] = audio
         elif isinstance(groups, list):
-            if audio is None:
-                audio = [None] * len(groups)
-                sampling_rate = [None] * len(groups)
+            if num_audio_tokens is None:
+                num_audio_tokens = [None] * len(groups)
 
             if window_start_ms is None:
                 window_start_ms = [None] * len(groups)
 
-            if len(groups) != len(audio):
-                raise ValueError("Number of audio inputs must match the number of sequences.")
-
-            if len(groups) != len(sampling_rate):
-                raise ValueError("Number of sampling rates must match the number of sequences.")
+            if len(groups) != len(num_audio_tokens):
+                raise ValueError("Number of num_audio_tokens inputs must match the number of sequences.")
 
             if len(window_start_ms) != len(groups):
                 raise ValueError("Number of window start times must match the number of sequences.")
 
             all_token_ids = []
-            all_audio = []
-            for g, w, a, s in zip(groups, window_start_ms, audio, sampling_rate):
-                token_ids, audio = self._encode_single(
+            for g, w, a in zip(groups, window_start_ms, num_audio_tokens):
+                token_ids = self._encode_single(
                     groups=g,
                     window_start_ms=w,
-                    audio=a,
-                    sampling_rate=s,
+                    num_audio_tokens=a,
                 )
                 all_token_ids.append((token_ids, None))
-                all_audio.append(audio)
 
             encoding = self._batch_prepare_for_model(
                 all_token_ids,
                 padding_strategy=padding,
                 truncation_strategy=truncation,
-                max_length=max_length,
-                return_tensors=return_tensors,
                 **kwargs,
             )
-            encoding["audio"] = all_audio
         else:
             raise ValueError("Input must be a list of Group objects or a single Group object.")
 
@@ -334,8 +288,8 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
     def __call__(
             self,
             metadata: Optional[Union[dict, list[dict]]] = None,
-            padding_strategy: PaddingStrategy = PaddingStrategy.LONGEST,
-            truncation_strategy: TruncationStrategy = TruncationStrategy.DO_NOT_TRUNCATE,
+            padding: PaddingStrategy = PaddingStrategy.LONGEST,
+            truncation: TruncationStrategy = TruncationStrategy.DO_NOT_TRUNCATE,
             max_length: Optional[int] = None,
             return_tensors: Optional[str] = "pt",
             **kwargs
@@ -345,8 +299,8 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             token_ids = self.convert_tokens_to_ids(token_strings)
             return self.prepare_for_model(
                 token_ids,
-                padding=padding_strategy,
-                truncation=truncation_strategy,
+                padding=padding,
+                truncation=truncation,
                 max_length=max_length,
                 return_tensors=return_tensors,
                 **kwargs,
@@ -360,8 +314,8 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 
             return self._batch_prepare_for_model(
                 all_token_ids,
-                padding_strategy=padding_strategy,
-                truncation_strategy=truncation_strategy,
+                padding_strategy=padding,
+                truncation_strategy=truncation,
                 max_length=max_length,
                 return_tensors=return_tensors,
             )

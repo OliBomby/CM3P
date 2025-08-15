@@ -1,12 +1,15 @@
 import io
 import itertools
+import math
 from os import PathLike
-from typing import Optional, Union, IO
+from typing import Optional, Union, IO, TypedDict
 
 import numpy as np
+import soxr
 from accelerate import logging
 from slider import Beatmap
 from transformers import WhisperFeatureExtractor, AutoProcessor
+from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import is_soundfile_available, is_torch_available, PaddingStrategy
 
 from cm3p import CM3PConfig
@@ -19,21 +22,49 @@ if is_torch_available():
 if is_soundfile_available():
     import soundfile as sf
 
-from transformers.audio_utils import AudioInput, load_audio_as, make_list_of_audio
+from transformers.audio_utils import AudioInput, load_audio_as, make_list_of_audio, load_audio
 from transformers.feature_extraction_utils import BatchFeature
-from transformers.processing_utils import AudioKwargs, ProcessingKwargs, ProcessorMixin
+from transformers.processing_utils import AudioKwargs, ProcessorMixin, ImagesKwargs, CommonKwargs
 
 logger = logging.get_logger(__name__)
 
 
+class CM3PTokenizerKwargs(TypedDict, total=False):
+    add_special_tokens: Optional[bool]
+    padding: Union[bool, str, PaddingStrategy]
+    truncation: Union[bool, str, TruncationStrategy]
+    max_length: Optional[int]
+    pad_to_multiple_of: Optional[int]
+    return_token_type_ids: Optional[bool]
+    return_attention_mask: Optional[bool]
+    return_overflowing_tokens: Optional[bool]
+    return_special_tokens_mask: Optional[bool]
+    return_offsets_mapping: Optional[bool]
+    return_length: Optional[bool]
+    verbose: Optional[bool]
+    padding_side: Optional[str]
+    return_mm_token_type_ids: Optional[bool]
+
+
 class CM3PAudioKwargs(AudioKwargs, total=False):
     max_source_positions: Optional[int]
+    hop_length: Optional[int]
+    window_size: Optional[int]
+    audio_length_per_tok: Optional[int]
 
 
 # noinspection PyTypedDict
-class CM3PProcessorKwargs(ProcessingKwargs, total=False):
+class CM3PProcessorKwargs(CM3PTokenizerKwargs, ImagesKwargs, AudioKwargs, CommonKwargs, total=False):
     _defaults = {
-        "text_kwargs": {
+        "beatmap_kwargs": {
+            "max_length": 8000,
+            "padding": PaddingStrategy.LONGEST,
+            "truncation": TruncationStrategy.LONGEST_FIRST,
+        },
+        "metadata_kwargs": {
+            "max_length": 128,
+            "padding": PaddingStrategy.LONGEST,
+            "truncation": TruncationStrategy.DO_NOT_TRUNCATE,
         },
         "audio_kwargs": {
             "sampling_rate": 16000,
@@ -41,13 +72,30 @@ class CM3PProcessorKwargs(ProcessingKwargs, total=False):
             "truncation": False,
             "pad_to_multiple_of": 480000,
             "max_source_positions": 3000,
+            "hop_length": 160,
+            "window_size": 400,
+            "audio_length_per_tok": 8,
         },
         "common_kwargs": {
             "return_tensors": "pt",
-            "return_dict": True,
-            "tokenize": True,
         },
     }
+
+    common_kwargs: CommonKwargs = {
+        **CommonKwargs.__annotations__,
+    }
+    beatmap_kwargs: CM3PTokenizerKwargs = {
+        **CM3PTokenizerKwargs.__annotations__,
+    }
+    metadata_kwargs: CM3PTokenizerKwargs = {
+        **CM3PTokenizerKwargs.__annotations__,
+    }
+    audio_kwargs: AudioKwargs = {
+        **AudioKwargs.__annotations__,
+    }
+
+    window_length_sec: float = 30.0
+    window_stride_sec: float = 30.0
 
 
 class CM3PProcessor(ProcessorMixin):
@@ -82,18 +130,62 @@ class CM3PProcessor(ProcessorMixin):
         beatmap_parser: CM3PBeatmapParser,
         beatmap_tokenizer: CM3PBeatmapTokenizer,
         metadata_tokenizer: CM3PMetadataTokenizer,
-        window_length: float = 30.0,
+        kwargs: Optional[CM3PProcessorKwargs] = None,
     ):
         self.audio_feature_extractor = audio_feature_extractor
         self.beatmap_parser = beatmap_parser
         self.beatmap_tokenizer = beatmap_tokenizer
         self.metadata_tokenizer = metadata_tokenizer
         self.audio_token = beatmap_tokenizer.audio_token
-        self.window_length = window_length
 
         super().__init__(audio_feature_extractor, beatmap_parser, beatmap_tokenizer, metadata_tokenizer)
 
-    def _retrieve_input_features(self, audio, max_source_positions, **kwargs):
+    def _pad_audio(
+            self,
+            audio_array: np.ndarray,
+            window_size: int = 400,
+            pad_to_multiple_of: Optional[int] = 480000,
+            **kwargs,
+    ) -> np.ndarray:
+        r"""Pad the audio array to the desired length.
+
+        Args:
+            audio_array: Audio data as a numpy array.
+            sampling_rate: Sampling rate of the audio.
+
+        Returns:
+            Padded audio array.
+        """
+        if pad_to_multiple_of:
+            next_multiple_of_chunk_frames = math.ceil(audio_array.shape[-1] / pad_to_multiple_of) * pad_to_multiple_of
+            audio_array = np.pad(audio_array, (0, next_multiple_of_chunk_frames - audio_array.shape[-1]))
+        elif audio_array.shape[-1] < window_size:
+            # minimum length for audios is at least one spectrogram frame
+            audio_array = np.pad(audio_array, (0, window_size - audio_array.shape[-1]))
+
+        return audio_array
+
+    def _encode_audio(
+            self,
+            audio: np.ndarray,
+            hop_length: int = 160,
+            audio_length_per_tok: int = 8,
+            **kwargs,
+    ) -> tuple[np.ndarray, int]:
+        audio = self._pad_audio(audio, **kwargs)
+        signal_length = audio.shape[0]
+
+        # for spectrogram-based models, the waveform is downsampled by the hop_length when computing the log-mel
+        if signal_length % hop_length != 0:
+            signal_length = math.ceil(signal_length / hop_length - 1)
+        else:
+            signal_length = signal_length // hop_length
+
+        num_audio_tokens = math.ceil(signal_length / audio_length_per_tok)
+
+        return audio, num_audio_tokens
+
+    def _retrieve_input_features(self, audio, max_source_positions, **kwargs) -> torch.Tensor:
         """
         Handles specific logic of CM3P expected input features: audio arrays should be padded to next multiple of 480000 (duration is a multiple of 30s), see CM3PProcessorKwargs' default audio_kwargs.
         Then mel input features are extracted and stacked along batch dimension, splitting into chunks of max_source_positions.
@@ -106,17 +198,17 @@ class CM3PProcessor(ProcessorMixin):
             input_features = audio_inputs["input_features"].reshape(
                 self.audio_feature_extractor.feature_size, -1, max_source_positions
             )
+
             input_features_list.append(input_features.transpose(0, 1))
 
         return torch.cat(input_features_list)
 
     def _load_audio(
         self,
-        audio_kwargs: CM3PAudioKwargs,
+        sampling_rate: int,
         audio: Union[str, list[str], AudioInput],
-        sampling_rate: Optional[int] = None,
-        audio_format: Optional[Union[str, list[str]]] = None,
-    ) -> list[io.BytesIO]:
+        audio_sampling_rate: Optional[Union[int, list[int]]] = None,
+    ) -> list[np.ndarray]:
         """
         Helper method to load audio from various formats and return a list of audio buffers.
         """
@@ -127,65 +219,141 @@ class CM3PProcessor(ProcessorMixin):
         is_list_of_audio = not (is_str or is_list_of_str)
 
         if is_list_of_audio:
-            if sampling_rate is None:
+            if audio_sampling_rate is None:
                 logger.warning_once(
-                    f"You've provided audio without specifying the sampling rate. It will be assumed to be {audio_kwargs["sampling_rate"]}, which can result in silent errors."
+                    f"You've provided audio without specifying the sampling rate. It will be assumed to be {sampling_rate}, which can result in silent errors."
                 )
-            elif sampling_rate != audio_kwargs["sampling_rate"]:
-                raise ValueError(
-                    f"The sampling rate of the audio ({sampling_rate}) does not match the sampling rate of the processor ({audio_kwargs["sampling_rate"]}). Please provide resampled the audio to the expected sampling rate."
-                )
-
-        sampling_rate = audio_kwargs["sampling_rate"]
+                audio_sampling_rate = sampling_rate
 
         if is_str:
-            audio = [load_audio_as(audio, return_format="buffer", force_mono=True, sampling_rate=sampling_rate)]
+            audio = [load_audio(audio, sampling_rate=sampling_rate)]
+            audio_sampling_rate = sampling_rate
         elif is_list_of_str:
-            audio = [
-                load_audio_as(el, return_format="buffer", force_mono=True, sampling_rate=sampling_rate) for el in audio
-            ]
-        else:
-            audio = make_list_of_audio(audio)
-            if len(audio) != len(audio_format):
-                raise ValueError(
-                    f"When passed as a list of audio, the length ({len(audio)}) must match the number of format ({len(audio_format)})"
-                )
-            audio_buffers = []
-            for array, f in zip(audio, audio_format):
-                # Create new BytesIO object and write audio data to it
-                buffer = io.BytesIO()
-                # Convert to mono if needed
-                if array.ndim == 2:
-                    array = array.mean(axis=1)
-                # Write to buffer with default format and sampling rate
-                sf.write(buffer, array, samplerate=audio_kwargs["sampling_rate"], format=f)
-                buffer.seek(0)
-                audio_buffers.append(buffer)
-            audio = audio_buffers
+            audio = [load_audio(el, sampling_rate=sampling_rate) for el in audio]
+            audio_sampling_rate = sampling_rate
 
-        return audio
+        audio = make_list_of_audio(audio)
+
+        if isinstance(audio_sampling_rate, int):
+            audio_sampling_rate = [audio_sampling_rate] * len(audio)
+
+        audio_buffers = []
+        for array, s in zip(audio, audio_sampling_rate):
+            array = np.asarray(array)
+            # Convert to mono if needed
+            if array.ndim == 2:
+                array = array.mean(axis=1)
+            # Resample if the sampling rate is different from the expected one
+            if s != sampling_rate:
+                array = soxr.resample(array, s, sampling_rate, quality="HQ")
+            audio_buffers.append(array)
+
+        return audio_buffers
+
+    def _merge_kwargs(
+        self,
+        model_processor_kwargs: CM3PProcessorKwargs,
+        **kwargs,
+    ) -> dict[str, dict]:
+        # Initialize dictionaries
+        output_kwargs = {
+            "beatmap_kwargs": {},
+            "metadata_kwargs": {},
+            "audio_kwargs": {},
+            "common_kwargs": {},
+        }
+
+        default_kwargs = {
+            "beatmap_kwargs": {},
+            "metadata_kwargs": {},
+            "audio_kwargs": {},
+            "common_kwargs": {},
+        }
+
+        possible_modality_keywords = {"beatmap", "metadata", "audio"}
+        used_keys = set()
+
+        # get defaults from set model processor kwargs if they exist
+        for modality in default_kwargs:  # noqa: PLC0206
+            default_kwargs[modality] = model_processor_kwargs._defaults.get(modality, {}).copy()
+
+        # pass defaults to output dictionary
+        output_kwargs.update(default_kwargs)
+
+        # update modality kwargs with passed kwargs
+        non_modality_kwargs = set(kwargs) - set(output_kwargs)
+        for modality, output_kwarg in output_kwargs.items():
+            for modality_key in model_processor_kwargs.__annotations__[modality].__annotations__:
+                # check if we received a structured kwarg dict or not to handle it correctly
+                if modality in kwargs:
+                    kwarg_value = kwargs[modality].pop(modality_key, "__empty__")
+                    # check if this key was passed as a flat kwarg.
+                    if kwarg_value != "__empty__" and modality_key in non_modality_kwargs:
+                        raise ValueError(
+                            f"Keyword argument {modality_key} was passed two times:\n"
+                            f"in a dictionary for {modality} and as a **kwarg."
+                        )
+                elif modality_key in kwargs:
+                    # we get a modality_key instead of popping it because modality-specific processors
+                    # can have overlapping kwargs
+                    kwarg_value = kwargs.get(modality_key, "__empty__")
+                else:
+                    kwarg_value = "__empty__"
+                if not isinstance(kwarg_value, str) or kwarg_value != "__empty__":
+                    output_kwarg[modality_key] = kwarg_value
+                    used_keys.add(modality_key)
+
+        # Determine if kwargs is a flat dictionary or contains nested dictionaries
+        if any(key in default_kwargs for key in kwargs):
+            # kwargs is dictionary-based, and some keys match modality names
+            for modality, subdict in kwargs.items():
+                if modality in default_kwargs:
+                    for subkey, subvalue in subdict.items():
+                        if subkey not in used_keys:
+                            output_kwargs[modality][subkey] = subvalue
+                            used_keys.add(subkey)
+        else:
+            # kwargs is a flat dictionary
+            for key, kwarg in kwargs.items():
+                if key not in used_keys:
+                    if key in model_processor_kwargs.__annotations__["common_kwargs"].__annotations__:
+                        output_kwargs["common_kwargs"][key] = kwarg
+                    elif key not in possible_modality_keywords:
+                        logger.warning_once(
+                            f"Keyword argument `{key}` is not a valid argument for this processor and will be ignored."
+                        )
+
+        # all modality-specific kwargs are updated with common kwargs
+        for kwarg in output_kwargs.values():
+            kwarg.update(output_kwargs["common_kwargs"])
+        return output_kwargs
 
     def __call__(
         self,
         metadata: Optional[Union[dict, list[dict]]] = None,
         beatmap: Optional[Union[str, list[str], PathLike, list[PathLike], IO[str], list[IO[str]], Beatmap, list[Beatmap]]] = None,
         audio: Optional[Union[str, list[str], AudioInput]] = None,
-        sampling_rate: Optional[int] = None,
-        audio_format: Optional[Union[str, list[str]]] = None,
+        audio_sampling_rate: Optional[Union[int, list[int]]] = None,
+        window_length_sec: Optional[float] = None,
+        window_stride_sec: Optional[float] = None,
         **kwargs,
     ):
         output_kwargs = self._merge_kwargs(
             CM3PProcessorKwargs,
             **kwargs,
         )
-        text_kwargs = output_kwargs["text_kwargs"]
-        audio_kwargs = output_kwargs["audio_kwargs"]
-        common_kwargs = output_kwargs["common_kwargs"]
 
-        max_source_positions = audio_kwargs.pop("max_source_positions")
-        return_tensors = common_kwargs.pop("return_tensors", None)
+        beatmap_kwargs: CM3PTokenizerKwargs = output_kwargs["beatmap_kwargs"]
+        metadata_kwargs: CM3PTokenizerKwargs = output_kwargs["metadata_kwargs"]
+        audio_kwargs: CM3PAudioKwargs = output_kwargs["audio_kwargs"]
+        common_kwargs: CommonKwargs = output_kwargs["common_kwargs"]
 
-        metadata_encoding, beatmap_encoding = None, None
+        window_length_sec = kwargs.get("window_length_sec", 30.0)
+        window_stride_sec = kwargs.get("window_stride_sec", 30.0)
+        return_tensors = common_kwargs.get("return_tensors", "pt")
+        sampling_rate = audio_kwargs.get("sampling_rate", 16000)
+
+        metadata_encoding, beatmap_encoding, num_audio_tokens = None, None, None
 
         if return_tensors != "pt":
             raise ValueError(f"{self.__class__.__name__} only supports `return_tensors='pt'`.")
@@ -197,14 +365,16 @@ class CM3PProcessor(ProcessorMixin):
             if isinstance(metadata, dict):
                 metadata = [metadata]
 
-            metadata_encoding = self.metadata_tokenizer(metadata)
+            metadata_encoding = self.metadata_tokenizer(
+                metadata,
+                **metadata_kwargs,
+            )
 
         if audio is not None:
             audio = self._load_audio(
-                audio_kwargs,
+                sampling_rate,
                 audio,
-                sampling_rate=sampling_rate,
-                audio_format=audio_format,
+                audio_sampling_rate=audio_sampling_rate,
             )
 
         if beatmap is not None:
@@ -219,67 +389,63 @@ class CM3PProcessor(ProcessorMixin):
             else:
                 audio = [None] * len(beatmap)
 
-            processed_windows = []
-            processed_audio = []
-            for b, a in zip(beatmap, audio):
-                with sf.SoundFile(a) as f:
-                    # Read the entire audio data
-                    audio_array = f.read(dtype="float32")
-                    sampling_rate = f.samplerate
-
-                song_length = len(audio_array) / sampling_rate
+            batch_start_ms = []
+            batch_groups = []
+            batch_audio = []
+            batch_num_audio_tokens = []
+            for b, audio_array in zip(beatmap, audio):
+                song_length = len(audio_array) / sampling_rate if audio_array is not None else None
                 beatmap_groups = self.beatmap_parser.parse_beatmap(b, song_length=song_length)
 
                 # Loop through with sliding window
                 groups_search_index = 0
-                for start_sec in np.arange(0, song_length - self.window_length, self.window_length):
-                    end_sec = start_sec + self.window_length
+                for start_sec in np.arange(0, song_length - window_length_sec, window_stride_sec):
+                    end_sec = start_sec + window_length_sec
 
-                    # Slice audio waveform
-                    start_frame = int(start_sec * sampling_rate)
-                    end_frame = int(end_sec * sampling_rate)
-                    audio_slice = audio_array[start_frame:end_frame]
+                    if audio_array is not None:
+                        # Slice audio waveform
+                        start_frame = int(start_sec * sampling_rate)
+                        end_frame = int(end_sec * sampling_rate)
+                        audio_slice = audio_array[start_frame:end_frame]
+                        # Pad the audio array and calculate the number of audio tokens
+                        audio_slice, num_audio_tokens = self._encode_audio(audio_slice, **kwargs)
+                    else:
+                        audio_slice = None
+                        num_audio_tokens = 0
 
                     # Find groups that fall within the current window
                     # Groups are sorted by time, so we can use a simple linear search from the last index
                     start_ms = start_sec * 1000
                     end_ms = end_sec * 1000
+                    next_start_ms = (start_sec + window_stride_sec) * 1000
                     window_groups = []
                     for group in itertools.islice(beatmap_groups, groups_search_index, None):
-                        if group.time < start_ms:
+                        if group.time < next_start_ms:
                             groups_search_index += 1
+
+                        if group.time < start_ms:
                             continue
                         elif group.time < end_ms:
                             window_groups.append(group)
-                            groups_search_index += 1
                         else:
                             break
 
-                    window_encoding = self.beatmap_tokenizer(
-                        groups=window_groups,
-                        audio=audio_slice,
-                        sampling_rate=sampling_rate,
-                        window_start_ms=start_ms,
-                        padding_strategy=PaddingStrategy.DO_NOT_PAD,
-                        pad_to_multiple_of=None,
-                        padding_side=None,
-                        return_attention_mask=False,
-                        return_tensors=None,
-                        prepend_batch_axis=False,
-                    )
+                    batch_start_ms.append(start_ms)
+                    batch_groups.append(window_groups)
+                    batch_audio.append(audio_slice)
+                    batch_num_audio_tokens.append(num_audio_tokens)
 
-                    audio = window_encoding.pop("audio", None)
-                    if audio is not None:
-                        processed_audio.append(audio)
-
-                    processed_windows.append(window_encoding)
-
-            batch_outputs = self.beatmap_tokenizer.pad(
-                processed_windows,
+            beatmap_encoding = self.beatmap_tokenizer(
+                groups=batch_groups,
+                window_start_ms=batch_start_ms,
+                num_audio_tokens=batch_num_audio_tokens,
+                **beatmap_kwargs,
             )
 
-            beatmap_encoding = BatchFeature(data=batch_outputs, tensor_type=return_tensors)
-            beatmap_encoding["input_features"] = self._retrieve_input_features(processed_audio, max_source_positions, **audio_kwargs)
+            if audio is not None:
+                data = dict(beatmap_encoding)
+                data["input_features"] = self._retrieve_input_features(batch_audio, **audio_kwargs)
+                beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)
 
         if metadata_encoding is not None and beatmap_encoding is not None:
             beatmap_encoding["metadata_ids"] = metadata_encoding["input_ids"]

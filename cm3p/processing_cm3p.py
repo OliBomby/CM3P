@@ -1,4 +1,4 @@
-import io
+import copy
 import itertools
 import math
 from os import PathLike
@@ -10,7 +10,7 @@ from accelerate import logging
 from slider import Beatmap
 from transformers import WhisperFeatureExtractor, AutoProcessor
 from transformers.tokenization_utils_base import TruncationStrategy
-from transformers.utils import is_soundfile_available, is_torch_available, PaddingStrategy
+from transformers.utils import is_torch_available, PaddingStrategy
 
 from cm3p import CM3PConfig
 from cm3p.parsing_cm3p import CM3PBeatmapParser
@@ -19,10 +19,7 @@ from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
 if is_torch_available():
     import torch
 
-if is_soundfile_available():
-    import soundfile as sf
-
-from transformers.audio_utils import AudioInput, load_audio_as, make_list_of_audio, load_audio
+from transformers.audio_utils import AudioInput, make_list_of_audio, load_audio
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.processing_utils import AudioKwargs, ProcessorMixin, ImagesKwargs, CommonKwargs
 
@@ -46,6 +43,11 @@ class CM3PTokenizerKwargs(TypedDict, total=False):
     return_mm_token_type_ids: Optional[bool]
 
 
+class CM3PBeatmapKwargs(CM3PTokenizerKwargs, total=False):
+    window_length_sec: float
+    window_stride_sec: float
+
+
 class CM3PAudioKwargs(AudioKwargs, total=False):
     max_source_positions: Optional[int]
     hop_length: Optional[int]
@@ -60,6 +62,8 @@ class CM3PProcessorKwargs(CM3PTokenizerKwargs, ImagesKwargs, AudioKwargs, Common
             "max_length": 8000,
             "padding": PaddingStrategy.LONGEST,
             "truncation": TruncationStrategy.LONGEST_FIRST,
+            "window_length_sec": 30.0,
+            "window_stride_sec": 30.0,
         },
         "metadata_kwargs": {
             "max_length": 128,
@@ -84,7 +88,7 @@ class CM3PProcessorKwargs(CM3PTokenizerKwargs, ImagesKwargs, AudioKwargs, Common
     common_kwargs: CommonKwargs = {
         **CommonKwargs.__annotations__,
     }
-    beatmap_kwargs: CM3PTokenizerKwargs = {
+    beatmap_kwargs: CM3PBeatmapKwargs = {
         **CM3PTokenizerKwargs.__annotations__,
     }
     metadata_kwargs: CM3PTokenizerKwargs = {
@@ -93,9 +97,6 @@ class CM3PProcessorKwargs(CM3PTokenizerKwargs, ImagesKwargs, AudioKwargs, Common
     audio_kwargs: AudioKwargs = {
         **AudioKwargs.__annotations__,
     }
-
-    window_length_sec: float = 30.0
-    window_stride_sec: float = 30.0
 
 
 class CM3PProcessor(ProcessorMixin):
@@ -113,9 +114,8 @@ class CM3PProcessor(ProcessorMixin):
             The beatmap tokenizer is a required input.
         metadata_tokenizer ([`CM3PMetadataTokenizer`]):
             The metadata tokenizer is a required input.
-        window_length (`float`, *optional*, defaults to 30.0):
-            The length of the sliding window in seconds. This is used to process the beatmap events
-            and audio in chunks.
+        default_kwargs (`CM3PProcessorKwargs`, *optional*):
+            Default keyword arguments for the processor. If not provided, the processor will use its own defaults
     """
 
     attributes = ["audio_feature_extractor", "beatmap_parser", "beatmap_tokenizer", "metadata_tokenizer"]
@@ -130,13 +130,16 @@ class CM3PProcessor(ProcessorMixin):
         beatmap_parser: CM3PBeatmapParser,
         beatmap_tokenizer: CM3PBeatmapTokenizer,
         metadata_tokenizer: CM3PMetadataTokenizer,
-        kwargs: Optional[CM3PProcessorKwargs] = None,
+        default_kwargs: Optional[CM3PProcessorKwargs] = None,
     ):
         self.audio_feature_extractor = audio_feature_extractor
         self.beatmap_parser = beatmap_parser
         self.beatmap_tokenizer = beatmap_tokenizer
         self.metadata_tokenizer = metadata_tokenizer
         self.audio_token = beatmap_tokenizer.audio_token
+
+        # noinspection PyProtectedMember
+        self._defaults = default_kwargs or copy.deepcopy(CM3PProcessorKwargs._defaults)
 
         super().__init__(audio_feature_extractor, beatmap_parser, beatmap_tokenizer, metadata_tokenizer)
 
@@ -250,40 +253,20 @@ class CM3PProcessor(ProcessorMixin):
 
         return audio_buffers
 
-    def _merge_kwargs(
-        self,
-        model_processor_kwargs: CM3PProcessorKwargs,
-        **kwargs,
-    ) -> dict[str, dict]:
-        # Initialize dictionaries
-        output_kwargs = {
-            "beatmap_kwargs": {},
-            "metadata_kwargs": {},
-            "audio_kwargs": {},
-            "common_kwargs": {},
-        }
-
-        default_kwargs = {
-            "beatmap_kwargs": {},
-            "metadata_kwargs": {},
-            "audio_kwargs": {},
-            "common_kwargs": {},
-        }
-
+    # noinspection PyTypedDict
+    def _merge_kwargs(self, **kwargs) -> CM3PProcessorKwargs:
+        output_kwargs = CM3PProcessorKwargs()
+        nested_modalities = ["beatmap_kwargs", "metadata_kwargs", "audio_kwargs", "common_kwargs"]
         possible_modality_keywords = {"beatmap", "metadata", "audio"}
         used_keys = set()
 
-        # get defaults from set model processor kwargs if they exist
-        for modality in default_kwargs:  # noqa: PLC0206
-            default_kwargs[modality] = model_processor_kwargs._defaults.get(modality, {}).copy()
-
         # pass defaults to output dictionary
-        output_kwargs.update(default_kwargs)
+        output_kwargs.update(self._defaults)
 
         # update modality kwargs with passed kwargs
         non_modality_kwargs = set(kwargs) - set(output_kwargs)
         for modality, output_kwarg in output_kwargs.items():
-            for modality_key in model_processor_kwargs.__annotations__[modality].__annotations__:
+            for modality_key in CM3PProcessorKwargs.__annotations__[modality].__annotations__:
                 # check if we received a structured kwarg dict or not to handle it correctly
                 if modality in kwargs:
                     kwarg_value = kwargs[modality].pop(modality_key, "__empty__")
@@ -304,10 +287,10 @@ class CM3PProcessor(ProcessorMixin):
                     used_keys.add(modality_key)
 
         # Determine if kwargs is a flat dictionary or contains nested dictionaries
-        if any(key in default_kwargs for key in kwargs):
+        if any(key in nested_modalities for key in kwargs):
             # kwargs is dictionary-based, and some keys match modality names
             for modality, subdict in kwargs.items():
-                if modality in default_kwargs:
+                if modality in nested_modalities:
                     for subkey, subvalue in subdict.items():
                         if subkey not in used_keys:
                             output_kwargs[modality][subkey] = subvalue
@@ -316,7 +299,7 @@ class CM3PProcessor(ProcessorMixin):
             # kwargs is a flat dictionary
             for key, kwarg in kwargs.items():
                 if key not in used_keys:
-                    if key in model_processor_kwargs.__annotations__["common_kwargs"].__annotations__:
+                    if key in CM3PProcessorKwargs.__annotations__["common_kwargs"].__annotations__:
                         output_kwargs["common_kwargs"][key] = kwarg
                     elif key not in possible_modality_keywords:
                         logger.warning_once(
@@ -334,24 +317,19 @@ class CM3PProcessor(ProcessorMixin):
         beatmap: Optional[Union[str, list[str], PathLike, list[PathLike], IO[str], list[IO[str]], Beatmap, list[Beatmap]]] = None,
         audio: Optional[Union[str, list[str], AudioInput]] = None,
         audio_sampling_rate: Optional[Union[int, list[int]]] = None,
-        window_length_sec: Optional[float] = None,
-        window_stride_sec: Optional[float] = None,
         **kwargs,
     ):
-        output_kwargs = self._merge_kwargs(
-            CM3PProcessorKwargs,
-            **kwargs,
-        )
+        output_kwargs = self._merge_kwargs(**kwargs)
 
         beatmap_kwargs: CM3PTokenizerKwargs = output_kwargs["beatmap_kwargs"]
         metadata_kwargs: CM3PTokenizerKwargs = output_kwargs["metadata_kwargs"]
         audio_kwargs: CM3PAudioKwargs = output_kwargs["audio_kwargs"]
         common_kwargs: CommonKwargs = output_kwargs["common_kwargs"]
 
-        window_length_sec = kwargs.get("window_length_sec", 30.0)
-        window_stride_sec = kwargs.get("window_stride_sec", 30.0)
-        return_tensors = common_kwargs.get("return_tensors", "pt")
-        sampling_rate = audio_kwargs.get("sampling_rate", 16000)
+        window_length_sec = beatmap_kwargs.pop("window_length_sec")
+        window_stride_sec = beatmap_kwargs.pop("window_stride_sec")
+        sampling_rate = audio_kwargs["sampling_rate"]
+        return_tensors = common_kwargs["return_tensors"]
 
         metadata_encoding, beatmap_encoding, num_audio_tokens = None, None, None
 

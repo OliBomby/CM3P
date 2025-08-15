@@ -151,7 +151,9 @@ class CM3PAudioConfig(PretrainedConfig):
         reference_compile=None,
         repad_logits_with_grad=False,
 
-        projection_dim=768,
+        projector_intermediate_size=2048,  # 4 * hidden_size for a 4x reduction in tokens
+        projector_dim=768,
+        projector_hidden_act="gelu",
 
         sample_rate: int = 16000,
         n_ftt: int = 2048,
@@ -194,7 +196,9 @@ class CM3PAudioConfig(PretrainedConfig):
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
 
-        self.projection_dim = projection_dim
+        self.projector_intermediate_size = projector_intermediate_size
+        self.projector_dim = projector_dim
+        self.projector_hidden_act = projector_hidden_act
 
         self.sample_rate = sample_rate
         self.n_ftt = n_ftt

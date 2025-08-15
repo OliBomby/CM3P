@@ -8,6 +8,7 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers import ModernBertModel, AutoModel, AutoModelForSequenceClassification
+from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPooling,
@@ -278,6 +279,20 @@ class CM3PMetadataModel(CM3PPreTrainedModel):
         )
 
 
+class CM3PMultiModalProjector(nn.Module):
+    def __init__(self, config: CM3PAudioConfig):
+        super().__init__()
+        self.linear_1 = nn.Linear(config.projector_intermediate_size, config.projector_dim, bias=False)
+        self.act = ACT2FN[config.projector_hidden_act]
+        self.linear_2 = nn.Linear(config.projector_dim, config.projector_dim, bias=False)
+
+    def forward(self, audio_features):
+        hidden_states = self.linear_1(audio_features)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.linear_2(hidden_states)
+        return hidden_states
+
+
 class CM3PAudioEncoder(nn.Module):
     def __init__(self, config: CM3PAudioConfig):
         super().__init__()
@@ -285,7 +300,7 @@ class CM3PAudioEncoder(nn.Module):
         self.conv1 = nn.Conv1d(config.n_mels, config.hidden_size, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(config.hidden_size, config.hidden_size, kernel_size=3, stride=2, padding=1)
         self.encoder = ModernBertModel(config)
-        self.projection = nn.Linear(config.hidden_size, config.projection_dim, bias=False)
+        self.multi_modal_projector = CM3PMultiModalProjector(config)
 
     def forward(
             self,
@@ -293,6 +308,7 @@ class CM3PAudioEncoder(nn.Module):
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
     ) -> CM3PAudioModelOutput:
+        # Conv layers from Whisper followed by an modern Bert encoder
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
 
@@ -308,13 +324,14 @@ class CM3PAudioEncoder(nn.Module):
             output_hidden_states=output_hidden_states,
         )
 
-        last_hidden_state = encoder_outputs.last_hidden_state
-        audio_embeds = self.projection(last_hidden_state)
-        audio_embeds = audio_embeds.reshape(-1, self.config.projection_dim)
+        # Reduce the sequence length and project to the beatmap hidden size
+        audio_hidden_states = encoder_outputs.last_hidden_state
+        audio_hidden_states = audio_hidden_states.reshape(-1, self.config.projector_intermediate_size)
+        audio_embeds = self.multi_modal_projector(audio_hidden_states)
 
         audio_outputs = CM3PAudioModelOutput(
-            last_hidden_state=last_hidden_state,
             audio_embeds=audio_embeds,
+            last_hidden_state=encoder_outputs.last_hidden_state,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
         )

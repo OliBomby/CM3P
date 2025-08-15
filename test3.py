@@ -1,6 +1,5 @@
 import torch
-from transformers import AutoProcessor, WhisperFeatureExtractor
-from transformers.tokenization_mistral_common import MistralCommonTokenizer
+from transformers import WhisperFeatureExtractor
 
 from cm3p import CM3PConfig
 from cm3p.modeling_cm3p import CM3PModel

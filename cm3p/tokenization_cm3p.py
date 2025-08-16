@@ -19,7 +19,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             vocab_file: Optional[str] = None,
             vocab_init: Optional[dict] = None,
             min_time: int = 0,
-            max_time: int = 8000,
+            max_time: int = 30000,
             time_step: int = 10,
             max_distance: int = 640,
             distance_step: int = 4,

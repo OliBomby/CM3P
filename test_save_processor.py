@@ -18,7 +18,7 @@ processor = CM3PProcessor(
     CM3PBeatmapParser(),
     CM3PBeatmapTokenizer(
         vocab_init=test_beatmap_tokenizer_config,
-        max_time=30000,
+        max_time=8000,
     ),
     CM3PMetadataTokenizer(
         vocab_init=test_metadata_tokenizer_config,

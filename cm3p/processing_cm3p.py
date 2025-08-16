@@ -68,7 +68,7 @@ class CM3PProcessorKwargs(CM3PTokenizerKwargs, ImagesKwargs, AudioKwargs, Common
         "metadata_kwargs": {
             "max_length": 128,
             "padding": PaddingStrategy.LONGEST,
-            "truncation": TruncationStrategy.DO_NOT_TRUNCATE,
+            "truncation": TruncationStrategy.LONGEST_FIRST,
         },
         "audio_kwargs": {
             "sampling_rate": 16000,

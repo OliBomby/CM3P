@@ -42,5 +42,6 @@ print(f"Loaded processor type: {type(loaded_processor)}")
 
 assert loaded_processor.to_dict() == processor.to_dict(), "Loaded processor does not match the original processor."
 assert loaded_processor.beatmap_tokenizer.max_time == processor.beatmap_tokenizer.max_time, "Max time of loaded processor does not match the original."
+assert loaded_processor.beatmap_tokenizer.get_vocab() == processor.beatmap_tokenizer.get_vocab(), "Vocab of loaded processor does not match the original."
 assert loaded_processor.metadata_tokenizer.min_year == processor.metadata_tokenizer.min_year, "Min year of loaded processor does not match the original."
 

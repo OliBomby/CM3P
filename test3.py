@@ -5,7 +5,7 @@ from cm3p import CM3PConfig
 from cm3p.modeling_cm3p import CM3PModel
 from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
-from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
+from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -60,10 +60,10 @@ processor = CM3PProcessor(
 audio = r"resources/audio.mp3"
 beatmap = r"resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"
 labels = [
-    {"difficulty": 1.5, "mode": "osu", "mapper": "OliBomby", "year": 2020},
-    {"difficulty": 3.0, "mode": "taiko", "mapper": "Cookiezi", "year": 2018},
-    {"difficulty": 5.0, "mode": "fruits", "mapper": "peppy", "year": 2021},
-    {"difficulty": 7.0, "mode": "mania", "mapper": "Xenon", "year": 2019},
+    CM3PMetadata(difficulty=1.5, mode="osu", mapper="OliBomby", year=2020),
+    CM3PMetadata(difficulty=3.0, mode="taiko", mapper="Cookiezi", year=2018),
+    CM3PMetadata(difficulty=5.0, mode="fruits", mapper="peppy", year=2021),
+    CM3PMetadata(difficulty=7.0, mode="mania", mapper="Xenon", year=2019),
 ]
 
 inputs = processor(metadata=labels, beatmap=beatmap, audio=audio, return_tensors="pt")

@@ -42,7 +42,6 @@ class EventType(Enum):
 @dataclasses.dataclass
 class Group:
     event_type: EventType = None
-    value: int = None
     time: int = 0
     has_time: bool = False
     snapping: int = None

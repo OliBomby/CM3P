@@ -21,11 +21,21 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             min_time: int = 0,
             max_time: int = 8000,
             time_step: int = 10,
+            max_distance: int = 640,
+            distance_step: int = 4,
+            position_range: tuple[int, int, int, int] = (-256, 768, -256, 640),
+            position_step: int = 4,
+            position_split_axes: bool = True,
             **kwargs,
     ):
         self.min_time = min_time
         self.max_time = max_time
         self.time_step = time_step
+        self.max_distance = max_distance
+        self.distance_step = distance_step
+        self.position_range = position_range
+        self.position_step = position_step
+        self.position_split_axes = position_split_axes
 
         self.audio_bos_token = "[AUDIO_BOS]"
         self.audio_eos_token = "[AUDIO_EOS]"
@@ -58,21 +68,93 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             min_time=min_time,
             max_time=max_time,
             time_step=time_step,
+            max_distance=max_distance,
+            distance_step=distance_step,
+            position_range=position_range,
+            position_step=position_step,
+            position_split_axes=position_split_axes,
             **kwargs
         )
 
     def _build_vocab_from_config(self, vocab_init):
         vocab = []
 
-        # Add time tokens
-        for time in np.arange(self.min_time, self.max_time + 1e-5, self.time_step):
-            vocab.append(f"[TIME_SHIFT_{int(time)}]")
-
-        # Add event type tokens
         for event_type in EventType:
             vocab.append(f"[{event_type.value.upper()}]")
 
+        for time in np.arange(self.min_time, self.max_time + 1e-5, self.time_step):
+            vocab.append(f"[TIME_SHIFT_{int(time)}]")
+
+        for snapping in range(0, 17):
+            vocab.append(f"[SNAPPING_{snapping}]")
+
+        for distance in range(0, self.max_distance + 1):
+            vocab.append(f"[DISTANCE_{distance}]")
+
+        if self.position_split_axes:
+            for x in np.arange(self.position_range[0], self.position_range[1] + 1e-5, self.position_step):
+                vocab.append(f"[POS_X_{int(x)}]")
+            for y in np.arange(self.position_range[2], self.position_range[3] + 1e-5, self.position_step):
+                vocab.append(f"[POS_Y_{int(y)}]")
+        else:
+            for x in np.arange(self.position_range[0], self.position_range[1] + 1e-5, self.position_step):
+                for y in np.arange(self.position_range[2], self.position_range[3] + 1e-5, self.position_step):
+                    vocab.append(f"[POS_{int(x)}_{int(y)}]")
+
+        for mania_column in range(1, 19):
+            vocab.append(f"[MANIA_COLUMN_{mania_column}]")
+
+        for scroll_speed in np.arange(0.0, 10.0 + 1e-5, 0.01):
+            vocab.append(f"[SCROLL_SPEED_{scroll_speed:.2f}]")
+
+        vocab.append("[NEW_COMBO]")
+
+        for hitsound in range(8):
+            for sampleset in range(1, 4):
+                for additions in range(1, 4):
+                    vocab.append(f"[HITSOUND_{(hitsound << 1)}_{sampleset}_{additions}]")
+
+        for volume in range(101):
+            vocab.append(f"[VOLUME_{volume}]")
+
         return {token: idx for idx, token in enumerate(vocab)}
+
+    def _tokenize_time_shift(self, time: int):
+        time = np.clip(time, self.min_time, self.max_time)
+        time = round(time / self.time_step) * self.time_step
+        return f"[TIME_SHIFT_{int(time)}]"
+
+    def _tokenize_distance(self, distance: int):
+        distance = np.clip(distance, 0, self.max_distance)
+        distance = round(distance / self.distance_step) * self.distance_step
+        return f"[DISTANCE_{distance}]"
+
+    def _tokenize_position(self, pos_x: int, pos_y: int):
+        pos_x = np.clip(pos_x, self.position_range[0], self.position_range[1])
+        pos_y = np.clip(pos_y, self.position_range[2], self.position_range[3])
+        pos_x = round(pos_x / self.position_step) * self.position_step
+        pos_y = round(pos_y / self.position_step) * self.position_step
+
+        if self.position_split_axes:
+            yield f"[POS_X_{int(pos_x)}]"
+            yield f"[POS_Y_{int(pos_y)}]"
+        else:
+            yield f"[POS_{int(pos_x)}_{int(pos_y)}]"
+
+    def _tokenize_mania_column(self, mania_column: int):
+        mania_column = np.clip(mania_column, 1, 18)
+        return f"[MANIA_COLUMN_{mania_column}]"
+
+    def _tokenize_scroll_speed(self, scroll_speed: float):
+        scroll_speed = np.clip(scroll_speed, 0.0, 10.0)
+        scroll_speed = round(scroll_speed / 0.01) * 0.01
+        return f"[SCROLL_SPEED_{scroll_speed:.2f}]"
+
+    def _tokenize_hitsound(self, hitsound: int, sampleset: int, addition: int):
+        hitsound = np.clip(hitsound >> 1, 0, 7) << 1
+        sampleset = np.clip(sampleset, 1, 3)
+        addition = np.clip(addition, 1, 3)
+        return f"[HITSOUND_{hitsound}_{sampleset}_{addition}]"
 
     def _tokenize_groups(
             self,
@@ -84,17 +166,29 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         tokens = [self.bos_token]
 
         for group in groups:
-            # Calculate time delta relative to the last event
-            time_delta = group.time - window_start_ms
-            # Quantize time_delta into a time token
-            time_delta = np.clip(time_delta, self.min_time, self.max_time)
-            time_delta = round(time_delta / self.time_step) * self.time_step
-            time_token = f"[TIME_SHIFT_{int(time_delta)}]"
-            tokens.append(time_token)
-
-            # Add the event type token
-            event_token = f"[{group.event_type.value.upper()}]"
-            tokens.append(event_token)
+            tokens.append(f"[{group.event_type.value.upper()}]")
+            if group.has_time:
+                tokens.append(self._tokenize_time_shift(group.time - window_start_ms))
+                if group.snapping is not None:
+                    tokens.append(f"[SNAPPING_{group.snapping}]")
+            if group.distance is not None:
+                tokens.append(self._tokenize_distance(group.distance))
+            if group.x is not None and group.y is not None:
+                tokens.extend(self._tokenize_position(group.x, group.y))
+            if group.mania_column is not None:
+                tokens.append(self._tokenize_mania_column(group.mania_column))
+            if group.new_combo:
+                tokens.append("[NEW_COMBO]")
+            if group.scroll_speed is not None:
+                tokens.append(self._tokenize_scroll_speed(group.scroll_speed))
+            for h, s, a, v, in zip(
+                    group.hitsounds,
+                    group.samplesets,
+                    group.additions,
+                    group.volumes,
+            ):
+                tokens.append(self._tokenize_hitsound(h, s, a))
+                tokens.append(f"[VOLUME_{v}]")
 
         tokens.append(self.eos_token)
         return tokens
@@ -170,10 +264,10 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
 
     @property
     def vocab_size(self):
-        return len(self.vocab)
+        return len(self.vocab) + len(self._added_tokens_encoder)
 
     def get_vocab(self):
-        return self.vocab.copy()
+        return self.vocab | self._added_tokens_encoder
 
     def _convert_token_to_id(self, token):
         return self.vocab.get(token, self.vocab.get(self.unk_token))
@@ -446,7 +540,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
     def _tokenize_descriptors(self, metadata: CM3PMetadata):
         descriptors = metadata.get('descriptors', [])
         if not descriptors:
-            return self.descriptor_unk_token
+            return [self.descriptor_unk_token]
         return [f"[DESCRIPTOR_{descriptor}]" for descriptor in descriptors]
 
     def _tokenize_metadata(self, metadata: CM3PMetadata):
@@ -478,7 +572,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             return_tensors: Optional[str] = "pt",
             **kwargs
     ) -> BatchEncoding:
-        if isinstance(metadata, (dict, CM3PMetadata)):
+        if isinstance(metadata, dict):
             token_strings = self._tokenize_metadata(metadata)
             token_ids = self.convert_tokens_to_ids(token_strings)
             return self.prepare_for_model(
@@ -506,10 +600,10 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 
     @property
     def vocab_size(self):
-        return len(self.vocab)
+        return len(self.vocab) + len(self._added_tokens_encoder)
 
     def get_vocab(self):
-        return self.vocab.copy()
+        return self.vocab | self._added_tokens_encoder
 
     def _convert_token_to_id(self, token):
         return self.vocab.get(token, self.vocab.get(self.unk_token))

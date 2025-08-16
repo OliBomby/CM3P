@@ -227,9 +227,9 @@ class CM3PBeatmapConfig(PretrainedConfig):
     def __init__(
         self,
         audio_config: CM3PAudioConfig = None,
-        audio_sos_token_id=831,
-        audio_eos_token_id=832,
-        audio_token_id=833,
+        audio_sos_token_id=3164,
+        audio_eos_token_id=3165,
+        audio_token_id=3166,
         # stuff
         projection_dim=512,
         num_channels=3,
@@ -239,7 +239,7 @@ class CM3PBeatmapConfig(PretrainedConfig):
         layer_norm_eps=1e-5,
         initializer_factor=1.0,
         # stuff
-        vocab_size=1000,
+        vocab_size=3167,
         hidden_size=768,
         intermediate_size=1152,
         num_hidden_layers=22,

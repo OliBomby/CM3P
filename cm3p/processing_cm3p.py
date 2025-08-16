@@ -14,7 +14,7 @@ from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NA
 
 from cm3p import CM3PConfig
 from cm3p.parsing_cm3p import CM3PBeatmapParser
-from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
+from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata
 
 if is_torch_available():
     import torch
@@ -313,7 +313,7 @@ class CM3PProcessor(ProcessorMixin):
 
     def __call__(
         self,
-        metadata: Optional[Union[dict, list[dict]]] = None,
+        metadata: Optional[Union[CM3PMetadata, list[CM3PMetadata]]] = None,
         beatmap: Optional[Union[str, list[str], PathLike, list[PathLike], IO[str], list[IO[str]], Beatmap, list[Beatmap]]] = None,
         audio: Optional[Union[str, list[str], AudioInput]] = None,
         audio_sampling_rate: Optional[Union[int, list[int]]] = None,
@@ -340,7 +340,7 @@ class CM3PProcessor(ProcessorMixin):
             raise ValueError("You have to specify either metadata or beatmap. Both cannot be none.")
 
         if metadata is not None:
-            if isinstance(metadata, dict):
+            if not isinstance(metadata, list):
                 metadata = [metadata]
 
             metadata_encoding = self.metadata_tokenizer(

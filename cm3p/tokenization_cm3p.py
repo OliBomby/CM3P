@@ -46,7 +46,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             bos_token=kwargs.pop("bos_token", "[BOS]"),
             eos_token=kwargs.pop("eos_token", "[EOS]"),
             unk_token=kwargs.pop("unk_token", "[UNK]"),
-            sep_token= kwargs.pop("sep_token", "[SEP]"),
+            sep_token=kwargs.pop("sep_token", "[SEP]"),
             pad_token=kwargs.pop("pad_token", "[PAD]"),
             cls_token=kwargs.pop("cls_token", "[CLS]"),
             mask_token=kwargs.pop("mask_token", "[MASK]"),
@@ -55,6 +55,9 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
                 self.audio_eos_token,
                 self.audio_token,
             ]),
+            min_time=min_time,
+            max_time=max_time,
+            time_step=time_step,
             **kwargs
         )
 
@@ -236,6 +239,11 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
                 self.mode_unk_token,
                 self.mapper_unk_token,
             ]),
+            min_difficculty=min_difficculty,
+            max_difficulty=max_difficulty,
+            difficulty_step=difficulty_step,
+            min_year=min_year,
+            max_year=max_year,
             **kwargs
         )
 

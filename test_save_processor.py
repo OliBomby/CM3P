@@ -16,8 +16,14 @@ test_metadata_tokenizer_config = {
 processor = CM3PProcessor(
     WhisperFeatureExtractor(),
     CM3PBeatmapParser(),
-    CM3PBeatmapTokenizer(vocab_init=test_beatmap_tokenizer_config),
-    CM3PMetadataTokenizer(vocab_init=test_metadata_tokenizer_config),
+    CM3PBeatmapTokenizer(
+        vocab_init=test_beatmap_tokenizer_config,
+        max_time=30000,
+    ),
+    CM3PMetadataTokenizer(
+        vocab_init=test_metadata_tokenizer_config,
+        min_year=2014,
+    ),
 )
 
 # Use a temporary directory to save and load the processor
@@ -35,3 +41,6 @@ assert isinstance(loaded_processor, CM3PProcessor)
 print(f"Loaded processor type: {type(loaded_processor)}")
 
 assert loaded_processor.to_dict() == processor.to_dict(), "Loaded processor does not match the original processor."
+assert loaded_processor.beatmap_tokenizer.max_time == processor.beatmap_tokenizer.max_time, "Max time of loaded processor does not match the original."
+assert loaded_processor.metadata_tokenizer.min_year == processor.metadata_tokenizer.min_year, "Min year of loaded processor does not match the original."
+

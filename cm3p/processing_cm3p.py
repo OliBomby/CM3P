@@ -1,16 +1,16 @@
 import copy
 import itertools
 import math
+import os
 from os import PathLike
 from typing import Optional, Union, IO, TypedDict
 
 import numpy as np
 import soxr
-from accelerate import logging
 from slider import Beatmap
 from transformers import WhisperFeatureExtractor, AutoProcessor
 from transformers.tokenization_utils_base import TruncationStrategy
-from transformers.utils import is_torch_available, PaddingStrategy
+from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NAME, logging
 
 from cm3p import CM3PConfig
 from cm3p.parsing_cm3p import CM3PBeatmapParser
@@ -139,7 +139,7 @@ class CM3PProcessor(ProcessorMixin):
         self.audio_token = beatmap_tokenizer.audio_token
 
         # noinspection PyProtectedMember
-        self._defaults = default_kwargs or copy.deepcopy(CM3PProcessorKwargs._defaults)
+        self.default_kwargs = default_kwargs or copy.deepcopy(CM3PProcessorKwargs._defaults)
 
         super().__init__(audio_feature_extractor, beatmap_parser, beatmap_tokenizer, metadata_tokenizer)
 
@@ -261,7 +261,7 @@ class CM3PProcessor(ProcessorMixin):
         used_keys = set()
 
         # pass defaults to output dictionary
-        output_kwargs.update(self._defaults)
+        output_kwargs.update(self.default_kwargs)
 
         # update modality kwargs with passed kwargs
         non_modality_kwargs = set(kwargs) - set(output_kwargs)
@@ -447,6 +447,54 @@ class CM3PProcessor(ProcessorMixin):
         """
         return self.beatmap_tokenizer.decode(*args, **kwargs)
 
-AutoProcessor.register(CM3PConfig, CM3PBeatmapParser)
+    def save_pretrained(self, save_directory, push_to_hub: bool = False, **kwargs):
+        os.makedirs(save_directory, exist_ok=True)
+
+        for attribute_name in self.attributes:
+            attribute = getattr(self, attribute_name)
+            # Include the processor class in the attribute config so this processor can then be reloaded with the
+            # `AutoProcessor` API.
+            if hasattr(attribute, "_set_processor_class"):
+                attribute._set_processor_class(self.__class__.__name__)
+            attribute.save_pretrained(os.path.join(save_directory, attribute_name))
+
+        output_processor_file = os.path.join(save_directory, PROCESSOR_NAME)
+        self.to_json_file(output_processor_file)
+        logger.warning_once(f"processor saved in {output_processor_file}")
+
+        if push_to_hub:
+            commit_message = kwargs.pop("commit_message", None)
+            repo_id = kwargs.pop("repo_id", save_directory.split(os.path.sep)[-1])
+            repo_id = self._create_repo(repo_id, **kwargs)
+            files_timestamps = self._get_files_timestamps(save_directory)
+
+            self._upload_modified_files(
+                save_directory,
+                repo_id,
+                files_timestamps,
+                commit_message=commit_message,
+                token=kwargs.get("token"),
+            )
+
+        return [output_processor_file]
+
+    @classmethod
+    def _get_arguments_from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        subfolder = kwargs.pop("subfolder", None)
+        args = []
+        for attribute_name in cls.attributes:
+            class_name = getattr(cls, f"{attribute_name}_class")
+            attribute_class = cls.get_possibly_dynamic_module(class_name)
+            attribute_subfolder = os.path.join(subfolder, attribute_name) if subfolder else attribute_name
+
+            args.append(attribute_class.from_pretrained(
+                pretrained_model_name_or_path,
+                subfolder=attribute_subfolder,
+                **kwargs
+            ))
+
+        return args
+
+AutoProcessor.register(CM3PConfig, CM3PProcessor)
 
 __all__ = ["CM3PProcessor"]

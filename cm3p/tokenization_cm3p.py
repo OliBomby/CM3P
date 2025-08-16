@@ -12,6 +12,7 @@ from cm3p.parsing_cm3p import Group, EventType
 
 class CM3PBeatmapTokenizer(PreTrainedTokenizer):
     model_input_names: list[str] = ["input_ids", "attention_mask"]
+    vocab_files_names: dict[str, str] = {"vocab_file": "vocab.json"}
 
     def __init__(
             self,
@@ -20,7 +21,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             min_time: int = 0,
             max_time: int = 8000,
             time_step: int = 10,
-            **kwargs
+            **kwargs,
     ):
         self.min_time = min_time
         self.max_time = max_time
@@ -42,18 +43,18 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
 
         self.ids_to_tokens = {i: t for t, i in self.vocab.items()}
         super().__init__(
-            bos_token="[BOS]",
-            eos_token="[EOS]",
-            unk_token="[UNK]",
-            sep_token="[SEP]",
-            pad_token="[PAD]",
-            cls_token="[CLS]",
-            mask_token="[MASK]",
-            additional_special_tokens=[
+            bos_token=kwargs.pop("bos_token", "[BOS]"),
+            eos_token=kwargs.pop("eos_token", "[EOS]"),
+            unk_token=kwargs.pop("unk_token", "[UNK]"),
+            sep_token= kwargs.pop("sep_token", "[SEP]"),
+            pad_token=kwargs.pop("pad_token", "[PAD]"),
+            cls_token=kwargs.pop("cls_token", "[CLS]"),
+            mask_token=kwargs.pop("mask_token", "[MASK]"),
+            additional_special_tokens=kwargs.pop("additional_special_tokens", [
                 self.audio_bos_token,
                 self.audio_eos_token,
                 self.audio_token,
-            ],
+            ]),
             **kwargs
         )
 
@@ -177,9 +178,20 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
     def _convert_id_to_token(self, index):
         return self.ids_to_tokens.get(index, self.unk_token)
 
+    def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> tuple[str]:
+        if not save_directory:
+            raise ValueError("The save_directory must be specified.")
+
+        vocab_file = f"{save_directory}/{filename_prefix or ""}vocab.json"
+        with open(vocab_file, 'w', encoding='utf-8') as f:
+            json.dump(self.vocab, f, ensure_ascii=False)
+
+        return (vocab_file,)
+
 
 class CM3PMetadataTokenizer(PreTrainedTokenizer):
     model_input_names: list[str] = ["input_ids"]
+    vocab_files_names: dict[str, str] = {"vocab_file": "vocab.json"}
 
     def __init__(
             self,
@@ -190,7 +202,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             difficulty_step: float = 0.1,
             min_year: int = 2000,
             max_year: int = 2030,
-            **kwargs
+            **kwargs,
     ):
         self.min_difficulty = min_difficculty
         self.max_difficulty = max_difficulty
@@ -215,15 +227,15 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 
         self.ids_to_tokens = {i: t for t, i in self.vocab.items()}
         super().__init__(
-            bos_token="[BOS]",
-            eos_token="[EOS]",
-            pad_token="[PAD]",
-            additional_special_tokens=[
+            bos_token=kwargs.pop("bos_token", "[BOS]"),
+            eos_token=kwargs.pop("eos_token", "[EOS]"),
+            pad_token=kwargs.pop("pad_token", "[PAD]"),
+            additional_special_tokens=kwargs.pop("additional_special_tokens", [
                 self.difficulty_unk_token,
                 self.year_unk_token,
                 self.mode_unk_token,
                 self.mapper_unk_token,
-            ],
+            ]),
             **kwargs
         )
 
@@ -332,6 +344,16 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 
     def _convert_id_to_token(self, index):
         return self.ids_to_tokens.get(index, self.unk_token)
+
+    def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> tuple[str]:
+        if not save_directory:
+            raise ValueError("The save_directory must be specified.")
+
+        vocab_file = f"{save_directory}/{filename_prefix or ""}vocab.json"
+        with open(vocab_file, 'w', encoding='utf-8') as f:
+            json.dump(self.vocab, f, ensure_ascii=False)
+
+        return (vocab_file,)
 
 AutoTokenizer.register(CM3PBeatmapConfig, CM3PBeatmapTokenizer)
 AutoTokenizer.register(CM3PMetadataConfig, CM3PMetadataTokenizer)

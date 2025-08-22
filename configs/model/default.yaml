@@ -1,0 +1,27 @@
+input_features: false
+project_encoder_input: true
+embed_decoder_input: true
+manual_norm_weights: false
+
+# Information to be fed to the model directly
+do_style_embed: true
+do_difficulty_embed: false
+do_mapper_embed: false
+do_song_position_embed: false
+cond_dim: 128
+cond_size: 0
+
+rope_type: "dynamic"
+rope_encoder_scaling_factor: 1.0
+rope_decoder_scaling_factor: 1.0
+
+spectrogram:
+  implementation: 'nnAudio'
+  log_scale: false
+  sample_rate: 16000
+  hop_length: 128
+  n_fft: 1024
+  n_mels: 388
+  f_min: 0
+  f_max: 8000
+  pad_mode: 'constant'

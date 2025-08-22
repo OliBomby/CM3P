@@ -1,6 +1,4 @@
 """CM3P model configuration"""
-from typing import Literal
-
 from transformers import AutoConfig
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
@@ -16,8 +14,6 @@ class CM3PMetadataConfig(PretrainedConfig):
     def __init__(
         self,
         projection_dim=512,
-        hidden_act="quick_gelu",
-        layer_norm_eps=1e-5,
         initializer_factor=1.0,
         # stuff
         vocab_size=1000,
@@ -46,10 +42,6 @@ class CM3PMetadataConfig(PretrainedConfig):
         mlp_bias=False,
         mlp_dropout=0.0,
         decoder_bias=True,
-        classifier_pooling: Literal["cls", "mean"] = "cls",
-        classifier_dropout=0.0,
-        classifier_bias=False,
-        classifier_activation="gelu",
         deterministic_flash_attn=False,
         sparse_prediction=False,
         sparse_pred_ignore_index=-100,
@@ -67,8 +59,6 @@ class CM3PMetadataConfig(PretrainedConfig):
         )
 
         self.projection_dim = projection_dim
-        self.layer_norm_eps = layer_norm_eps
-        self.hidden_act = hidden_act
         self.initializer_range = initializer_range
         self.initializer_factor = initializer_factor
         self.attention_dropout = attention_dropout
@@ -94,20 +84,8 @@ class CM3PMetadataConfig(PretrainedConfig):
         self.mlp_bias = mlp_bias
         self.mlp_dropout = mlp_dropout
         self.decoder_bias = decoder_bias
-        self.classifier_pooling = classifier_pooling
-        self.classifier_dropout = classifier_dropout
-        self.classifier_bias = classifier_bias
-        self.classifier_activation = classifier_activation
         self.deterministic_flash_attn = deterministic_flash_attn
-        self.sparse_prediction = sparse_prediction
-        self.sparse_pred_ignore_index = sparse_pred_ignore_index
         self.reference_compile = reference_compile
-        self.repad_logits_with_grad = repad_logits_with_grad
-
-        if self.classifier_pooling not in ["cls", "mean"]:
-            raise ValueError(
-                f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.'
-            )
 
     def to_dict(self):
         output = super().to_dict()
@@ -141,10 +119,6 @@ class CM3PAudioConfig(PretrainedConfig):
         mlp_bias=False,
         mlp_dropout=0.0,
         decoder_bias=True,
-        classifier_pooling: Literal["cls", "mean"] = "cls",
-        classifier_dropout=0.0,
-        classifier_bias=False,
-        classifier_activation="gelu",
         deterministic_flash_attn=False,
         sparse_prediction=False,
         sparse_pred_ignore_index=-100,
@@ -186,15 +160,8 @@ class CM3PAudioConfig(PretrainedConfig):
         self.mlp_bias = mlp_bias
         self.mlp_dropout = mlp_dropout
         self.decoder_bias = decoder_bias
-        self.classifier_pooling = classifier_pooling
-        self.classifier_dropout = classifier_dropout
-        self.classifier_bias = classifier_bias
-        self.classifier_activation = classifier_activation
         self.deterministic_flash_attn = deterministic_flash_attn
-        self.sparse_prediction = sparse_prediction
-        self.sparse_pred_ignore_index = sparse_pred_ignore_index
         self.reference_compile = reference_compile
-        self.repad_logits_with_grad = repad_logits_with_grad
 
         self.projector_intermediate_size = projector_intermediate_size
         self.projector_dim = projector_dim
@@ -207,11 +174,6 @@ class CM3PAudioConfig(PretrainedConfig):
         self.f_min = f_min
         self.f_max = f_max
         self.pad_mode = pad_mode
-
-        if self.classifier_pooling not in ["cls", "mean"]:
-            raise ValueError(
-                f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.'
-            )
 
     def to_dict(self):
         output = super().to_dict()
@@ -232,11 +194,6 @@ class CM3PBeatmapConfig(PretrainedConfig):
         audio_token_id=3166,
         # stuff
         projection_dim=512,
-        num_channels=3,
-        image_size=224,
-        patch_size=32,
-        hidden_act="quick_gelu",
-        layer_norm_eps=1e-5,
         initializer_factor=1.0,
         # stuff
         vocab_size=3167,
@@ -265,10 +222,6 @@ class CM3PBeatmapConfig(PretrainedConfig):
         mlp_bias=False,
         mlp_dropout=0.0,
         decoder_bias=True,
-        classifier_pooling: Literal["cls", "mean"] = "cls",
-        classifier_dropout=0.0,
-        classifier_bias=False,
-        classifier_activation="gelu",
         deterministic_flash_attn=False,
         sparse_prediction=False,
         sparse_pred_ignore_index=-100,
@@ -295,13 +248,7 @@ class CM3PBeatmapConfig(PretrainedConfig):
         self.audio_token_id = audio_token_id
 
         self.projection_dim = projection_dim
-        self.num_channels = num_channels
-        self.patch_size = patch_size
-        self.image_size = image_size
         self.initializer_factor = initializer_factor
-        self.layer_norm_eps = layer_norm_eps
-        self.hidden_act = hidden_act
-
         self.vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
@@ -323,20 +270,11 @@ class CM3PBeatmapConfig(PretrainedConfig):
         self.mlp_bias = mlp_bias
         self.mlp_dropout = mlp_dropout
         self.decoder_bias = decoder_bias
-        self.classifier_pooling = classifier_pooling
-        self.classifier_dropout = classifier_dropout
-        self.classifier_bias = classifier_bias
-        self.classifier_activation = classifier_activation
         self.deterministic_flash_attn = deterministic_flash_attn
         self.sparse_prediction = sparse_prediction
         self.sparse_pred_ignore_index = sparse_pred_ignore_index
         self.reference_compile = reference_compile
         self.repad_logits_with_grad = repad_logits_with_grad
-
-        if self.classifier_pooling not in ["cls", "mean"]:
-            raise ValueError(
-                f'Invalid value for `classifier_pooling`, should be either "cls" or "mean", but is {self.classifier_pooling}.'
-            )
 
     def to_dict(self):
         output = super().to_dict()

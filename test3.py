@@ -8,6 +8,7 @@ from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+# device = "cpu"
 
 test_beatmap_tokenizer_config = {
     "event_types": [
@@ -31,16 +32,21 @@ test_metadata_tokenizer_config = {
         "Xenon",
     ],
 }
-
-config = CM3PConfig()
-model = CM3PModel._from_config(config, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
-model = model.to(device)
 processor = CM3PProcessor(
     WhisperFeatureExtractor(),
     CM3PBeatmapParser(),
     CM3PBeatmapTokenizer(vocab_init=test_beatmap_tokenizer_config),
     CM3PMetadataTokenizer(vocab_init=test_metadata_tokenizer_config),
 )
+
+config = CM3PConfig()
+config.beatmap_config.vocab_size = processor.beatmap_tokenizer.vocab_size
+config.beatmap_config.audio_token_id = processor.beatmap_tokenizer.convert_tokens_to_ids(processor.beatmap_tokenizer.audio_token)
+config.beatmap_config.audio_sos_token_id = processor.beatmap_tokenizer.convert_tokens_to_ids(processor.beatmap_tokenizer.audio_eos_token)
+config.beatmap_config.audio_eos_token_id = processor.beatmap_tokenizer.convert_tokens_to_ids(processor.beatmap_tokenizer.audio_eos_token)
+config.metadata_config.vocab_size = processor.metadata_tokenizer.vocab_size
+model = CM3PModel._from_config(config, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+model = model.to(device)
 
 # print(model)
 # print(model.config)

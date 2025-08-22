@@ -1,0 +1,7 @@
+defaults:
+  - default
+  - ../model@model: whisper_small_v2
+  - _self_
+
+
+

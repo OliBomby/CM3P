@@ -7,13 +7,14 @@ from typing import Optional, Union, IO, TypedDict
 
 import numpy as np
 import soxr
-from slider import Beatmap
+from pandas import Series
+from slider import Beatmap, HoldNote
 from transformers import WhisperFeatureExtractor, AutoProcessor
 from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NAME, logging
 
 from cm3p import CM3PConfig
-from cm3p.parsing_cm3p import CM3PBeatmapParser
+from cm3p.parsing_cm3p import CM3PBeatmapParser, load_beatmap, get_song_length
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata
 
 if is_torch_available():
@@ -24,6 +25,89 @@ from transformers.feature_extraction_utils import BatchFeature
 from transformers.processing_utils import AudioKwargs, ProcessorMixin, ImagesKwargs, CommonKwargs
 
 logger = logging.get_logger(__name__)
+
+
+def get_hold_note_ratio(beatmap: Beatmap) -> Optional[float]:
+    notes = beatmap.hit_objects(stacking=False)
+
+    if len(notes) == 0:
+        return None
+
+    hold_note_count = 0
+    for note in notes:
+        if isinstance(note, HoldNote):
+            hold_note_count += 1
+    return hold_note_count / len(notes)
+
+
+def get_scroll_speed_ratio(beatmap: Beatmap) -> Optional[float]:
+    # Number of scroll speed changes divided by number of distinct hit object times
+    notes = beatmap.hit_objects(stacking=False)
+
+    if len(notes) == 0:
+        return None
+
+    last_time = -1
+    num_note_times = 0
+    for note in notes:
+        if note.time != last_time:
+            num_note_times += 1
+            last_time = note.time
+    last_scroll_speed = -1
+    num_scroll_speed_changes = 0
+    for timing_point in beatmap.timing_points:
+        if timing_point.parent is None:
+            last_scroll_speed = 1
+        else:
+            scroll_speed = -100 / timing_point.ms_per_beat
+            if scroll_speed != last_scroll_speed and last_scroll_speed != -1:
+                num_scroll_speed_changes += 1
+            last_scroll_speed = scroll_speed
+    return num_scroll_speed_changes / num_note_times
+
+
+def get_hitsounded_status(beatmap: Beatmap) -> bool:
+    notes = beatmap.hit_objects(stacking=False)
+    for note in notes:
+        if note.hitsound != 0:
+            return True
+    return False
+
+
+def get_difficulty(beatmap_metadata: Series, speed: float = 1.0) -> float:
+    # StarRating is an array that gives the difficulty for the speeds:
+    # 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0
+    # Linearly interpolate between the two closest speeds
+    star_ratings = beatmap_metadata["StarRating"]
+    speed_ratios = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    return np.interp(speed, speed_ratios, star_ratings)
+
+
+def get_metadata(
+        beatmap_metadata: Series = None,
+        beatmap: Beatmap = None,
+        audio_samples: np.ndarray = None,
+        sampling_rate: int = None,
+        speed: float = 1.0,
+        song_position: Optional[float] = None,
+) -> CM3PMetadata:
+    mode = beatmap_metadata["ModeInt"] if beatmap_metadata is not None else None
+    song_length = get_song_length(audio_samples, sampling_rate, beatmap)
+    return CM3PMetadata(
+        difficulty=get_difficulty(beatmap_metadata, speed) if beatmap_metadata is not None else None,
+        year=beatmap_metadata["SubmittedDate"].year if beatmap_metadata is not None else None,
+        mode=mode,
+        mapper=beatmap_metadata["UserId"] if beatmap_metadata is not None else None,
+        cs=beatmap_metadata["CircleSize"] if mode in [0, 2] and beatmap_metadata is not None else None,
+        hitsounded=get_hitsounded_status(beatmap) if beatmap is not None else None,
+        song_length=song_length,
+        song_position=song_position,
+        global_sv=beatmap.slider_multiplier if mode in [0, 2] and beatmap is not None else None,
+        mania_keycount=int(beatmap.circle_size) if mode == 3 and beatmap is not None else None,
+        hold_note_ratio=get_hold_note_ratio(beatmap) if mode == 3 and beatmap is not None else None,
+        scroll_speed_ratio=get_scroll_speed_ratio(beatmap) if mode in [1, 3] and beatmap is not None else None,
+        tags=beatmap_metadata["TopTagIds"] if beatmap_metadata is not None else None,
+    )
 
 
 class CM3PTokenizerKwargs(TypedDict, total=False):
@@ -148,7 +232,7 @@ class CM3PProcessor(ProcessorMixin):
             audio_array: np.ndarray,
             window_size: int = 400,
             pad_to_multiple_of: Optional[int] = 480000,
-            **kwargs,
+            **_,
     ) -> np.ndarray:
         r"""Pad the audio array to the desired length.
 
@@ -211,6 +295,7 @@ class CM3PProcessor(ProcessorMixin):
         sampling_rate: int,
         audio: Union[str, list[str], AudioInput],
         audio_sampling_rate: Optional[Union[int, list[int]]] = None,
+        speed: float = 1.0,
     ) -> list[np.ndarray]:
         """
         Helper method to load audio from various formats and return a list of audio buffers.
@@ -223,16 +308,17 @@ class CM3PProcessor(ProcessorMixin):
 
         if is_list_of_audio:
             if audio_sampling_rate is None:
+                # noinspection PyUnresolvedReferences
                 logger.warning_once(
                     f"You've provided audio without specifying the sampling rate. It will be assumed to be {sampling_rate}, which can result in silent errors."
                 )
                 audio_sampling_rate = sampling_rate
 
         if is_str:
-            audio = [load_audio(audio, sampling_rate=sampling_rate)]
+            audio = [load_audio(audio, sampling_rate=int(sampling_rate // speed))]
             audio_sampling_rate = sampling_rate
         elif is_list_of_str:
-            audio = [load_audio(el, sampling_rate=sampling_rate) for el in audio]
+            audio = [load_audio(el, sampling_rate=int(sampling_rate // speed)) for el in audio]
             audio_sampling_rate = sampling_rate
 
         audio = make_list_of_audio(audio)
@@ -302,6 +388,7 @@ class CM3PProcessor(ProcessorMixin):
                     if key in CM3PProcessorKwargs.__annotations__["common_kwargs"].__annotations__:
                         output_kwargs["common_kwargs"][key] = kwarg
                     elif key not in possible_modality_keywords:
+                        # noinspection PyUnresolvedReferences
                         logger.warning_once(
                             f"Keyword argument `{key}` is not a valid argument for this processor and will be ignored."
                         )
@@ -317,6 +404,10 @@ class CM3PProcessor(ProcessorMixin):
         beatmap: Optional[Union[str, list[str], PathLike, list[PathLike], IO[str], list[IO[str]], Beatmap, list[Beatmap]]] = None,
         audio: Optional[Union[str, list[str], AudioInput]] = None,
         audio_sampling_rate: Optional[Union[int, list[int]]] = None,
+        speed: float = 1.0,
+        multiply_metadata: bool = False,
+        populate_metadata: bool = False,
+        metadata_dropout_prob: float = 0.0,
         **kwargs,
     ):
         output_kwargs = self._merge_kwargs(**kwargs)
@@ -339,15 +430,6 @@ class CM3PProcessor(ProcessorMixin):
         if metadata is None and beatmap is None:
             raise ValueError("You have to specify either metadata or beatmap. Both cannot be none.")
 
-        if metadata is not None:
-            if not isinstance(metadata, list):
-                metadata = [metadata]
-
-            metadata_encoding = self.metadata_tokenizer(
-                metadata,
-                **metadata_kwargs,
-            )
-
         if audio is not None:
             audio = self._load_audio(
                 sampling_rate,
@@ -367,13 +449,34 @@ class CM3PProcessor(ProcessorMixin):
             else:
                 audio = [None] * len(beatmap)
 
+            if metadata is not None:
+                if not isinstance(metadata, list):
+                    metadata = [metadata]
+                if (multiply_metadata or populate_metadata) and len(metadata) != len(beatmap):
+                    raise ValueError(
+                        f"The number of metadata entries ({len(metadata)}) must match the number of beatmaps ({len(beatmap)})"
+                        "` if multiply_metadata` or `populate_metadata` is set to True."
+                    )
+            else:
+                metadata = [CM3PMetadata()] * len(beatmap) if populate_metadata else [None] * len(beatmap)
+
             batch_start_ms = []
             batch_groups = []
             batch_audio = []
             batch_num_audio_tokens = []
-            for b, audio_array in zip(beatmap, audio):
-                song_length = len(audio_array) / sampling_rate if audio_array is not None else None
-                beatmap_groups = self.beatmap_parser.parse_beatmap(b, song_length=song_length)
+            new_metadata = []
+            for b, m, audio_array in zip(beatmap, metadata, audio):
+                song_length = get_song_length(audio_array, sampling_rate, b)
+                b: Beatmap = load_beatmap(b)
+                beatmap_groups = self.beatmap_parser.parse_beatmap(b, speed=speed, song_length=song_length)
+
+                if populate_metadata and not multiply_metadata:
+                    new_metadata.append(m | get_metadata(
+                        beatmap=b,
+                        audio_samples=audio_array,
+                        sampling_rate=sampling_rate,
+                        speed=speed,
+                    ))
 
                 # Loop through with sliding window
                 groups_search_index = 0
@@ -413,6 +516,17 @@ class CM3PProcessor(ProcessorMixin):
                     batch_audio.append(audio_slice)
                     batch_num_audio_tokens.append(num_audio_tokens)
 
+                    if populate_metadata and not multiply_metadata:
+                        new_metadata.append(m | get_metadata(
+                            beatmap=b,
+                            audio_samples=audio_array,
+                            sampling_rate=sampling_rate,
+                            speed=speed,
+                            song_position=start_sec / song_length,
+                        ))
+
+            metadata = new_metadata
+
             beatmap_encoding = self.beatmap_tokenizer(
                 groups=batch_groups,
                 window_start_ms=batch_start_ms,
@@ -424,6 +538,22 @@ class CM3PProcessor(ProcessorMixin):
                 data = dict(beatmap_encoding)
                 data["input_features"] = self._retrieve_input_features(batch_audio, **audio_kwargs)
                 beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)
+
+        if metadata is not None and not (isinstance(metadata, list) and any(m is None for m in metadata)):
+            if not isinstance(metadata, list):
+                metadata = [metadata]
+
+            if metadata_dropout_prob > 0.0:
+                for m in metadata:
+                    # Randomly drop out metadata fields
+                    for field in CM3PMetadata.__annotations__.keys():
+                        if getattr(m, field) is not None and np.random.rand() < metadata_dropout_prob:
+                            setattr(m, field, None)
+
+            metadata_encoding = self.metadata_tokenizer(
+                metadata,
+                **metadata_kwargs,
+            )
 
         if metadata_encoding is not None and beatmap_encoding is not None:
             beatmap_encoding["metadata_ids"] = metadata_encoding["input_ids"]
@@ -455,11 +585,13 @@ class CM3PProcessor(ProcessorMixin):
             # Include the processor class in the attribute config so this processor can then be reloaded with the
             # `AutoProcessor` API.
             if hasattr(attribute, "_set_processor_class"):
+                # noinspection PyProtectedMember
                 attribute._set_processor_class(self.__class__.__name__)
             attribute.save_pretrained(os.path.join(save_directory, attribute_name))
 
         output_processor_file = os.path.join(save_directory, PROCESSOR_NAME)
         self.to_json_file(output_processor_file)
+        # noinspection PyUnresolvedReferences
         logger.warning_once(f"processor saved in {output_processor_file}")
 
         if push_to_hub:
@@ -497,4 +629,4 @@ class CM3PProcessor(ProcessorMixin):
 
 AutoProcessor.register(CM3PConfig, CM3PProcessor)
 
-__all__ = ["CM3PProcessor"]
+__all__ = ["CM3PProcessor", "get_metadata"]

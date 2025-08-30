@@ -17,7 +17,6 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
     def __init__(
             self,
             vocab_file: Optional[str] = None,
-            vocab_init: Optional[dict] = None,
             min_time: int = 0,
             max_time: int = 30000,
             time_step: int = 10,
@@ -41,13 +40,9 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         self.audio_eos_token = "[AUDIO_EOS]"
         self.audio_token = "[AUDIO]"
 
-        if vocab_file is None and vocab_init is None:
-            raise ValueError("Either vocab_file or vocab_init must be provided.")
-
-        if vocab_init is not None:
-            self.vocab = self._build_vocab_from_config(vocab_init)
-
-        if vocab_file is not None:
+        if vocab_file is None:
+            self.vocab = self._build_vocab_from_config()
+        else:
             with open(vocab_file, 'r', encoding='utf-8') as f:
                 self.vocab = json.load(f)
 
@@ -76,7 +71,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             **kwargs
         )
 
-    def _build_vocab_from_config(self, vocab_init):
+    def _build_vocab_from_config(self):
         vocab = []
 
         for event_type in EventType:
@@ -288,22 +283,35 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
 
 class CM3PMetadata(TypedDict, total=False):
     """
-    A TypedDict to represent the metadata for a beatmap.
-    `total=False` indicates that all keys are optional.
+    Metadata fields for a beatmap.
+
+    difficulty: Star rating, unitless (osu! difficulty)
+    year: Year of beatmap creation (YYYY)
+    mode: Game mode ID or name (e.g., "osu", "mania")
+    mapper: Beatmap creator's ID or username
+    cs: Circle size (osu!std), unitless
+    hitsounded: Whether the beatmap is hitsounded (True/False)
+    song_length: Song length in seconds
+    song_position: Relative position in song [0.0-1.0], unitless
+    global_sv: Global scroll velocity (osu!mania), multiplier
+    mania_keycount: Number of keys in osu!mania [1-18]
+    hold_note_ratio: Ratio of hold notes [0.0-1.0], unitless
+    scroll_speed_ratio: Ratio of scroll speed changes [0.0-1.0], unitless
+    tags: List of beatmap tag IDs or names
     """
-    difficulty: float
-    year: int
-    mode: str
-    mapper: str
-    cs: float
-    hitsounded: bool
-    song_length: int
-    song_position: float
-    global_sv: float
-    mania_keycount: int
-    hold_note_ratio: float
-    scroll_speed_ratio: float
-    descriptors: list[str]
+    difficulty: float  # Star rating, unitless (osu! difficulty)
+    year: int  # Year of beatmap creation (YYYY)
+    mode: Union[int, str]  # Game mode ID or name (e.g., "osu", "mania")
+    mapper: Union[int, str]  # Beatmap creator's ID or username
+    cs: float  # Circle size (osu!std), unitless
+    hitsounded: bool  # Whether the beatmap is hitsounded (True/False)
+    song_length: float  # Song length in seconds
+    song_position: float  # Relative position in song [0.0-1.0], unitless
+    global_sv: float  # Global scroll velocity (osu!mania), multiplier
+    mania_keycount: int  # Number of keys in osu!mania [1-18]
+    hold_note_ratio: float  # Ratio of hold notes [0.0-1.0], unitless
+    scroll_speed_ratio: float  # Ratio of scroll speed changes [0.0-1.0], unitless
+    tags: list[Union[int, str]]  # List of beatmap tag IDs or names
 
 
 class CM3PMetadataTokenizer(PreTrainedTokenizer):
@@ -313,12 +321,14 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
     def __init__(
             self,
             vocab_file: Optional[str] = None,
-            vocab_init: Optional[dict] = None,
+            modes: dict[int, str] = None,
+            mappers: dict[int, str] = None,
+            tags: dict[int, dict] = None,
             min_difficculty: float = 0.0,
             max_difficulty: float = 14.0,
             difficulty_step: float = 0.1,
             min_year: int = 2000,
-            max_year: int = 2077,
+            max_year: int = 2023,
             max_song_length: int = 600,
             song_length_step: int = 10,
             song_position_step: float = 0.01,
@@ -327,6 +337,9 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             scroll_speed_ratio_step: float = 0.1,
             **kwargs,
     ):
+        self.modes = modes or {}
+        self.mappers = mappers or {}
+        self.tags = tags or {}
         self.min_difficulty = min_difficculty
         self.max_difficulty = max_difficulty
         self.difficulty_step = difficulty_step
@@ -351,19 +364,16 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         self.mania_keycount_unk_token = "[MANIA_KEYCOUNT_UNK]"
         self.hold_note_ratio_unk_token = "[HOLD_NOTE_RATIO_UNK]"
         self.scroll_speed_ratio_unk_token = "[SCROLL_SPEED_RATIO_UNK]"
-        self.descriptor_unk_token = "[DESCRIPTOR_UNK]"
+        self.tag_unk_token = "[TAG_UNK]"
 
-        if vocab_file is None and vocab_init is None:
-            raise ValueError("Either vocab_file or vocab_init must be provided.")
-
-        if vocab_init is not None:
-            self.vocab = self._build_vocab_from_config(vocab_init)
-
-        if vocab_file is not None:
+        if vocab_file is None:
+            self.vocab = self._build_vocab_from_config()
+        else:
             with open(vocab_file, 'r', encoding='utf-8') as f:
                 self.vocab = json.load(f)
 
         self.ids_to_tokens = {i: t for t, i in self.vocab.items()}
+
         super().__init__(
             bos_token=kwargs.pop("bos_token", "[BOS]"),
             eos_token=kwargs.pop("eos_token", "[EOS]"),
@@ -381,8 +391,11 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
                 self.mania_keycount_unk_token,
                 self.hold_note_ratio_unk_token,
                 self.scroll_speed_ratio_unk_token,
-                self.descriptor_unk_token,
+                self.tag_unk_token,
             ]),
+            modes=modes,
+            mappers=mappers,
+            tags=tags,
             min_difficculty=min_difficculty,
             max_difficulty=max_difficulty,
             difficulty_step=difficulty_step,
@@ -397,21 +410,19 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             **kwargs
         )
 
-    def _build_vocab_from_config(self, vocab_init):
+    def _build_vocab_from_config(self):
         vocab = []
 
-        for difficulty in np.arange(
-                self.min_difficulty, self.max_difficulty + 1e-5, self.difficulty_step
-        ):
+        for difficulty in np.arange(self.min_difficulty, self.max_difficulty + 1e-5, self.difficulty_step):
             vocab.append(f"[DIFFICULTY_{difficulty:.1f}]")
 
         for year in range(self.min_year, self.max_year + 1):
             vocab.append(f"[YEAR_{year}]")
 
-        for mode in vocab_init.get('modes', []):
-            vocab.append(f"[MODE_{str(mode).upper()}]")
+        for mode in self.modes.values():
+            vocab.append(f"[MODE_{mode}]")
 
-        for mapper in vocab_init.get('mappers', []):
+        for mapper in self.mappers.values():
             vocab.append(f"[MAPPER_{mapper}]")
 
         for cs in np.arange(0.0, 10.0 + 1e-5, 0.1):
@@ -420,14 +431,10 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         for hitsounded in [True, False]:
             vocab.append(f"[HITSOUNDED_{str(hitsounded).upper()}]")
 
-        for song_length in np.arange(
-                0, self.max_song_length + 1e-5, self.song_length_step
-        ):
+        for song_length in np.arange(0, self.max_song_length + 1e-5, self.song_length_step):
             vocab.append(f"[SONG_LENGTH_{int(song_length)}]")
 
-        for song_position in np.arange(
-                0.0, 1.0 + 1e-5, self.song_position_step
-        ):
+        for song_position in np.arange(0.0, 1.0 + 1e-5, self.song_position_step):
             vocab.append(f"[SONG_POSITION_{song_position:.2f}]")
 
         for global_sv in np.arange(0.4, 3.6 + 1e-5, self.global_sv_step):
@@ -442,12 +449,12 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         for scroll_speed_ratio in np.arange(0.0, 1.0 + 1e-5, self.scroll_speed_ratio_step):
             vocab.append(f"[SCROLL_SPEED_RATIO_{scroll_speed_ratio:.1f}]")
 
-        for descriptor in vocab_init.get('descriptors', []):
-            vocab.append(f"[DESCRIPTOR_{descriptor}]")
+        for tag in self.tags.values():
+            vocab.append(f"[TAG_{tag['name']}]")
 
         return {token: idx for idx, token in enumerate(vocab)}
 
-    def _tokenize_diffulty(self, metadata: CM3PMetadata):
+    def _tokenize_difficulty(self, metadata: CM3PMetadata):
         difficulty = metadata.get('difficulty', None)
         if difficulty is None:
             return self.difficulty_unk_token
@@ -464,13 +471,16 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 
     def _tokenize_mode(self, metadata: CM3PMetadata):
         mode = metadata.get('mode', None)
+        if isinstance(mode, int):
+            mode = self.modes.get(mode, None)
         if mode is None:
             return self.mode_unk_token
-        mode = str(mode).upper()
         return f"[MODE_{mode}]"
 
     def _tokenize_mapper(self, metadata: CM3PMetadata):
         mapper = metadata.get('mapper', None)
+        if isinstance(mapper, int):
+            mapper = self.mappers.get(mapper, None)
         if mapper is None:
             return self.mapper_unk_token
         return f"[MAPPER_{mapper}]"
@@ -537,16 +547,26 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         scroll_speed_ratio = round(scroll_speed_ratio / self.scroll_speed_ratio_step) * self.scroll_speed_ratio_step
         return f"[SCROLL_SPEED_RATIO_{scroll_speed_ratio:.1f}]"
 
-    def _tokenize_descriptors(self, metadata: CM3PMetadata):
-        descriptors = metadata.get('descriptors', [])
-        if not descriptors:
-            return [self.descriptor_unk_token]
-        return [f"[DESCRIPTOR_{descriptor}]" for descriptor in descriptors]
+    def _tokenize_tags(self, metadata: CM3PMetadata):
+        tags = metadata.get('tags', []).copy()
+        i = 0
+        while i < len(tags):
+            if isinstance(tags[i], int):
+                tag_id = tags[i]
+                if tag_id in self.tags:
+                    tags[i] = self.tags[tag_id]['name']
+                else:
+                    tags.pop(i)
+                    continue
+            i += 1
+        if not tags:
+            return [self.tag_unk_token]
+        return [f"[TAG_{tag}]" for tag in tags]
 
     def _tokenize_metadata(self, metadata: CM3PMetadata):
         tokens = [
             self.bos_token,
-            self._tokenize_diffulty(metadata),
+            self._tokenize_difficulty(metadata),
             self._tokenize_year(metadata),
             self._tokenize_mode(metadata),
             self._tokenize_mapper(metadata),
@@ -559,7 +579,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             self._tokenize_hold_note_ratio(metadata),
             self._tokenize_scroll_speed_ratio(metadata),
         ]
-        tokens.extend(self._tokenize_descriptors(metadata))
+        tokens.extend(self._tokenize_tags(metadata))
         tokens.append(self.eos_token)
         return tokens
 

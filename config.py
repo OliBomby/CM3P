@@ -47,15 +47,17 @@ class ModelConfig:
 @dataclass
 class DataConfig:
     dataset_type: str = "mmrs"   # Dataset type (ors/mmrs)
-    train_dataset_path: str = "/workspace/datasets/MMRS39389"  # Training dataset directory
+    train_dataset_paths: list[str] = field(default_factory=lambda: ["/workspace/datasets/MMRS39389", "/workspace/datasets/MMUS40000"])  # Training dataset directory
     train_dataset_start: int = 0  # Training dataset start index
     train_dataset_end: int = 38689  # Training dataset end index
-    test_dataset_path: str = "/workspace/datasets/MMRS39389"  # Testing/validation dataset directory
+    test_dataset_paths: list[str] = field(default_factory=lambda: ["/workspace/datasets/MMRS39389", "/workspace/datasets/MMUS40000"])  # Testing/validation dataset directory
     test_dataset_start: int = 38689  # Testing/validation dataset start index
     test_dataset_end: int = 39389  # Testing/validation dataset end index
+    metadata_dropout_prob: float = 0.2  # Probability of dropping metadata during training
+
     src_seq_len: int = 1024
     tgt_seq_len: int = 2048
-    sample_rate: int = 16000
+    sampling_rate: int = 16000
     hop_length: int = 128
     cycle_length: int = 16
     per_track: bool = True  # Loads all beatmaps in a track sequentially which optimizes audio data loading
@@ -72,7 +74,7 @@ class DataConfig:
     year_dropout_prob: float = 0.2
     hold_note_ratio_dropout_prob: float = 0.2
     scroll_speed_ratio_dropout_prob: float = 0.2
-    descriptor_dropout_prob: float = 0.2
+    tag_dropout_prob: float = 0.2
     # All Special Prefix Tokens
     add_out_context_types: bool = True  # Add tokens indicating types of the out context
     add_gamemode_token: bool = True
@@ -87,7 +89,7 @@ class DataConfig:
     add_keycount_token: bool = True  # Add token for the number of keys in mania
     add_hold_note_ratio_token: bool = True  # Add token for the ratio of hold notes in mania
     add_scroll_speed_ratio_token: bool = True  # Add token for the scroll speed ratio in mania
-    add_descriptors: bool = True  # Add beatmap descriptor tokens
+    add_tags: bool = True  # Add beatmap tag tokens
     add_sv_special_token: bool = True  # Add token for last SV value
     add_kiai_special_token: bool = True  # Add token for last kiai state
     add_song_position_token: bool = True  # Add token for the position of the song in the mapset
@@ -115,7 +117,7 @@ class DataConfig:
         {"in": [ContextType.GD], "out": [ContextType.TIMING, ContextType.KIAI, ContextType.MAP, ContextType.SV]}
     ])  # List of context types to include in the dataset
     context_weights: list[float] = field(default_factory=lambda: [4, 1, 1])  # List of weights for each context type. Determines how often each context type is sampled
-    descriptors_path: str = ''  # Path to file with all beatmap descriptors
+    tags_path: str = ''  # Path to file with all beatmap descriptors
     mappers_path: str = ''  # Path to file with all beatmap mappers
     add_timing: bool = False  # Add beatmap timing to map context
     add_snapping: bool = True  # Model hit object snapping

@@ -47,7 +47,7 @@ data:                  # Data settings
   year_dropout_prob: 0.2
   hold_note_ratio_dropout_prob: 0.2
   scroll_speed_ratio_dropout_prob: 0.2
-  descriptor_dropout_prob: 0.2
+  tag_dropout_prob: 0.2
   add_empty_sequences: true
   add_empty_sequences_at_step: -1
   add_pre_tokens_at_step: -1
@@ -62,7 +62,7 @@ data:                  # Data settings
   lookback: 0             # Fraction of audio sequence to fill with tokens from previous inference window
   lookahead: 0            # Fraction of audio sequence to skip at the end of the audio window
   lookback_prob: 0.0  # Probability of using the lookback augmentation for a beatmap in the dataset
-  descriptors_path: ''   # Path to file with all beatmap descriptors
+  tags_path: ''   # Path to file with all beatmap tags
   position_range: [-256, 768, -256, 640]  # Range of hit object coordinates
   dt_augment_sqrt: false  # Sample DT augmentation from a square root distribution
   min_year: null  # Minimum year of the beatmap to include in the dataset
@@ -92,7 +92,7 @@ data:                  # Data settings
   add_keycount_token: true  # Add token for the number of keys in mania
   add_hold_note_ratio_token: true  # Add token for the ratio of hold notes in mania
   add_scroll_speed_ratio_token: true  # Add token for the scroll speed ratio in mania
-  add_descriptors: true  # Add beatmap descriptor tokens
+  add_tags: true  # Add beatmap tag tokens
   add_sv_special_token: true  # Add token for last SV value
   add_kiai_special_token: true  # Add token for last kiai state
   add_song_position_token: false  # Add token for the position of the song in the mapset

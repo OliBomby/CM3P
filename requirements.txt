@@ -3,3 +3,6 @@ transformers
 hydra-core
 slider @ git+https://github.com/OliBomby/slider.git@gedagedigedagedaoh
 wandb
+pandas
+pyarrow
+matplotlib

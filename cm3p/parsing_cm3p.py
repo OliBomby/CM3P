@@ -149,6 +149,45 @@ def get_median_mpb(timing_points: list[TimingPoint], last_time: float) -> float:
     return median
 
 
+def load_beatmap(beatmap: Union[str, PathLike, IO[str], Beatmap]) -> Beatmap:
+    """Load a beatmap from a file path, file object, or Beatmap object.
+
+    Args:
+        beatmap: Beatmap file path, file object, or Beatmap object.
+
+    Returns:
+        beatmap: Loaded Beatmap object.
+    """
+    if isinstance(beatmap, (str, PathLike)):
+        beatmap = Beatmap.from_path(beatmap)
+    elif isinstance(beatmap, IO):
+        beatmap = Beatmap.from_file(beatmap.name)
+    return beatmap
+
+
+def get_song_length(
+        samples: np.ndarray = None,
+        sample_rate: int = None,
+        beatmap: Union[Beatmap | list[TimingPoint]] = None,
+) -> float:
+    if samples is not None and sample_rate is not None:
+        return len(samples) / sample_rate
+
+    if beatmap is None:
+        return 0
+
+    if isinstance(beatmap, Beatmap) and len(beatmap.hit_objects(stacking=False)) > 0:
+        last_ho = beatmap.hit_objects(stacking=False)[-1]
+        last_time = last_ho.end_time if hasattr(last_ho, "end_time") else last_ho.time
+        return last_time.total_seconds() + 0.000999  # Add a small buffer to the last time
+
+    timing = beatmap.timing_points if isinstance(beatmap, Beatmap) else beatmap
+    if len(timing) == 0:
+        return 0
+
+    return timing[-1].offset.total_seconds() + 0.01
+
+
 class CM3PBeatmapParser(FeatureExtractionMixin):
     """
     A class to parse CM3P beatmap files.
@@ -197,17 +236,13 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         Args:
             beatmap: Beatmap object parsed from an .osu file.
             speed: Speed multiplier for the beatmap.
-            song_length: Length of the song in milliseconds. If not provided, it will be calculated from the beatmap.
+            song_length: Length of the song in seconds. If not provided, it will be calculated from the beatmap.
 
         Returns:
             events: List of Event object lists.
             event_times: List of event times.
         """
-        if isinstance(beatmap, (str, PathLike)):
-            beatmap = Beatmap.from_path(beatmap)
-        elif isinstance(beatmap, IO):
-            beatmap = Beatmap.from_file(beatmap.name)
-            
+        beatmap = load_beatmap(beatmap)
         hit_objects = beatmap.hit_objects(stacking=False)
         last_pos = np.array((256, 192))
         groups = []
@@ -311,14 +346,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         assert len(timing) > 0, "No timing points found in beatmap."
 
         groups = []
-        if isinstance(beatmap, Beatmap) and len(beatmap.hit_objects(stacking=False)) > 0:
-            last_ho = beatmap.hit_objects(stacking=False)[-1]
-            last_time = last_ho.end_time if hasattr(last_ho, "end_time") else last_ho.time
-            last_time = last_time.total_seconds() * 1000 + 0.999  # Add a small buffer to the last time
-        elif song_length is not None:
-            last_time = song_length
-        else:
-            last_time = timing[-1].offset.total_seconds() * 1000 + 10
+        last_time = song_length or get_song_length(beatmap=beatmap)
+        last_time = int(last_time * 1000)
 
         # Get all timing points with BPM changes
         timing_points = [tp for tp in timing if tp.bpm]
@@ -718,4 +747,4 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
 
 AutoFeatureExtractor.register(CM3PConfig, CM3PBeatmapParser)
 
-__all__ = ["CM3PBeatmapParser"]
+__all__ = ["CM3PBeatmapParser", "EventType", "Group", "load_beatmap", "get_song_length"]

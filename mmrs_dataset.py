@@ -1,27 +1,17 @@
 from __future__ import annotations
 
-import os
 import random
-from multiprocessing.managers import Namespace
-from typing import Optional, Callable
 from pathlib import Path
+from typing import Optional, Callable
 
 import numpy as np
-import numpy.typing as npt
-import torch
 from pandas import Series, DataFrame
-from slider import Beatmap
 from torch.utils.data import IterableDataset
+from transformers.utils import PaddingStrategy
 
 from cm3p.processing_cm3p import CM3PProcessor, get_metadata
 from config import DataConfig
 from data_utils import load_mmrs_metadata, filter_mmrs_metadata, load_audio_file
-
-OSZ_FILE_EXTENSION = ".osz"
-AUDIO_FILE_NAME = "audio.mp3"
-MILISECONDS_PER_SECOND = 1000
-STEPS_PER_MILLISECOND = 0.1
-LABEL_IGNORE_ID = -100
 
 
 class MmrsDataset(IterableDataset):
@@ -44,7 +34,7 @@ class MmrsDataset(IterableDataset):
         self.args = args
         self.processor = processor
         self.test = test
-        self.paths = Path(args.test_dataset_paths if test else args.train_dataset_paths)
+        self.paths = [Path(p) for p in (args.test_dataset_paths if test else args.train_dataset_paths)]
         self.start = args.test_dataset_start if test else args.train_dataset_start
         self.end = args.test_dataset_end if test else args.train_dataset_end
         self.metadata = load_mmrs_metadata(self.paths)
@@ -77,6 +67,7 @@ class MmrsDataset(IterableDataset):
                 filtered_metadata,
                 self._iterable_factory,
                 self.args.cycle_length,
+                self.args.drop_last,
             )
 
         return self._iterable_factory(filtered_metadata).__iter__()
@@ -91,13 +82,14 @@ class MmrsDataset(IterableDataset):
 
 
 class InterleavingBeatmapDatasetIterable:
-    __slots__ = ("workers", "cycle_length", "index")
+    __slots__ = ("workers", "cycle_length", "index", "drop_last")
 
     def __init__(
             self,
             metadata: DataFrame,
             iterable_factory: Callable,
             cycle_length: int,
+            drop_last: bool = False,
     ):
         self.workers = [
             iterable_factory(df).__iter__()
@@ -105,6 +97,7 @@ class InterleavingBeatmapDatasetIterable:
         ]
         self.cycle_length = cycle_length
         self.index = 0
+        self.drop_last = drop_last
 
     def __iter__(self) -> "InterleavingBeatmapDatasetIterable":
         return self
@@ -118,6 +111,8 @@ class InterleavingBeatmapDatasetIterable:
                 self.index += 1
                 return item
             except StopIteration:
+                if self.drop_last:
+                    raise StopIteration
                 self.workers.remove(self.workers[self.index])
         raise StopIteration
 
@@ -153,41 +148,44 @@ class BeatmapDatasetIterable:
             metadata = self.metadata.loc[beatmapset_id]
             first_beatmap_metadata = metadata.iloc[0]
 
+            audio_cache = {}
             speed = self._get_speed_augment()
-            track_path = first_beatmap_metadata["Path"] / "data" / first_beatmap_metadata["BeatmapSetFolder"]
-            audio_path = track_path / first_beatmap_metadata["AudioFile"]
-
-            try:
-                audio_samples = load_audio_file(audio_path, self.args.sampling_rate, speed)
-            except Exception as e:
-                print(f"Failed to load audio file: {audio_path}")
-                print(e)
-                continue
+            track_path = Path(first_beatmap_metadata["Path"]) / "data" / first_beatmap_metadata["BeatmapSetFolder"]
 
             for i, beatmap_metadata in metadata.iterrows():
-                for sample in self._get_next_beatmap(audio_samples, beatmap_metadata, speed):
+                for sample in self._get_next_beatmap(track_path, beatmap_metadata, speed, audio_cache):
                     yield sample
 
-    def _get_next_beatmap(self, audio_samples, beatmap_metadata: Series, speed: float) -> dict:
-        beatmap_path = beatmap_metadata["Path"] / "data" / beatmap_metadata["BeatmapSetFolder"] / beatmap_metadata["BeatmapFile"]
-        metadata = get_metadata(beatmap_metadata=beatmap_metadata, speed=speed)
+    def _get_next_beatmap(self, track_path, beatmap_metadata: Series, speed: float, audio_cache: dict) -> dict:
+        audio_path = track_path / beatmap_metadata["AudioFile"]
+        beatmap_path = track_path / beatmap_metadata["BeatmapFile"]
 
-        processor_kwargs = {
-            "metadata": metadata,
-            "beatmap": beatmap_path,
-            "audio": audio_samples,
-            "audio_sampling_rate": self.args.sampling_rate,
-            "speed": speed,
-            "multiply_metadata": True,
-            "populate_metadata": True,
-            "metadata_dropout_prob": self.args.metadata_dropout_prob,
-            "return_tensors": None,
-        }
+        try:
+            if audio_path in audio_cache:
+                audio_samples = audio_cache[audio_path]
+            else:
+                audio_samples = load_audio_file(audio_path, self.args.sampling_rate, speed)
+                audio_cache[audio_path] = audio_samples
+        except Exception as e:
+            print(f"Failed to load audio file: {audio_path}")
+            print(e)
+            return
 
-        results = self.processor(**processor_kwargs)
+        results = self.processor(
+            metadata=get_metadata(beatmap_metadata=beatmap_metadata, speed=speed),
+            beatmap=beatmap_path,
+            audio=audio_samples,
+            audio_sampling_rate=self.args.sampling_rate,
+            speed=speed,
+            multiply_metadata=True,
+            populate_metadata=True,
+            metadata_dropout_prob=self.args.metadata_dropout_prob,
+            padding=PaddingStrategy.MAX_LENGTH,
+            return_tensors="pt",
+        )
 
         # Split the batch feature and yield each individual sample, so we can interleave and create varied batches
-        batch_size = results["input_ids"].shape[0]
+        batch_size = len(results["input_ids"])
         for i in range(batch_size):
             result = {key: results[key][i] for key in results}
             yield result

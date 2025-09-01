@@ -18,7 +18,7 @@ rope_decoder_scaling_factor: 1.0
 spectrogram:
   implementation: 'nnAudio'
   log_scale: false
-  sample_rate: 16000
+  sampling_rate: 16000
   hop_length: 128
   n_fft: 1024
   n_mels: 388

@@ -27,7 +27,7 @@ def load_audio_file(file: str, sampling_rate: int, speed: float = 1.0) -> npt.ND
     Returns:
         audio: Audio time series.
     """
-    audio = load_audio(file, sampling_rate=int(sampling_rate // speed))
+    audio = load_audio(str(file), sampling_rate=int(sampling_rate // speed))
     audio = np.asarray(audio)
 
     # Convert to mono if needed
@@ -50,7 +50,7 @@ def load_mmrs_metadata(path: Union[str, list[str]]) -> DataFrame:
         df.set_index(["BeatmapSetId", "Id"], inplace=True)
         df_list.append(df)
 
-    df = pd.concat(df_list, ignore_index=True)
+    df = pd.concat(df_list, ignore_index=False)
     df.sort_index(inplace=True)
     return df
 

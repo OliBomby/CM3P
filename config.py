@@ -3,8 +3,7 @@ from typing import Any, Optional
 
 from hydra.core.config_store import ConfigStore
 from omegaconf import OmegaConf, MISSING
-
-from .event import ContextType
+from transformers import TrainingArguments
 
 
 # Default config here based on V28
@@ -13,7 +12,7 @@ from .event import ContextType
 class SpectrogramConfig:
     implementation: str = "nnAudio"  # Spectrogram implementation (nnAudio/torchaudio)
     log_scale: bool = False
-    sample_rate: int = 16000
+    sampling_rate: int = 16000
     hop_length: int = 128
     n_fft: int = 1024
     n_mels: int = 388
@@ -54,12 +53,13 @@ class DataConfig:
     test_dataset_start: int = 38689  # Testing/validation dataset start index
     test_dataset_end: int = 39389  # Testing/validation dataset end index
     metadata_dropout_prob: float = 0.2  # Probability of dropping metadata during training
+    cycle_length: int = 16
+    drop_last: bool = True  # Drop last incomplete batch
 
     src_seq_len: int = 1024
     tgt_seq_len: int = 2048
     sampling_rate: int = 16000
     hop_length: int = 128
-    cycle_length: int = 16
     per_track: bool = True  # Loads all beatmaps in a track sequentially which optimizes audio data loading
     only_last_beatmap: bool = False  # Only use the last beatmap in the mapset
     center_pad_decoder: bool = False  # Center pad decoder input
@@ -111,11 +111,6 @@ class DataConfig:
     lookback: float = 0  # Fraction of audio sequence to fill with tokens from previous inference window
     lookahead: float = 0  # Fraction of audio sequence to skip at the end of the audio window
     lookback_prob: float = 0.0  # Probability of using the lookback augmentation for a beatmap in the dataset
-    context_types: list[dict[str, list[ContextType]]] = field(default_factory=lambda: [
-        {"in": [ContextType.NONE], "out": [ContextType.TIMING, ContextType.KIAI, ContextType.MAP, ContextType.SV]},
-        {"in": [ContextType.NO_HS], "out": [ContextType.TIMING, ContextType.KIAI, ContextType.MAP, ContextType.SV]},
-        {"in": [ContextType.GD], "out": [ContextType.TIMING, ContextType.KIAI, ContextType.MAP, ContextType.SV]}
-    ])  # List of context types to include in the dataset
     context_weights: list[float] = field(default_factory=lambda: [4, 1, 1])  # List of weights for each context type. Determines how often each context type is sampled
     tags_path: str = ''  # Path to file with all beatmap descriptors
     mappers_path: str = ''  # Path to file with all beatmap mappers
@@ -199,6 +194,10 @@ class ProfileConfig:
 
 @dataclass
 class TrainConfig:
+    training: dict = field(default_factory=dict)  # TrainingArguments
+    freeze_beatmap_model: bool = False
+    freeze_metadata_model: bool = False
+
     compile: bool = True
     device: str = "gpu"
     precision: str = "bf16"
@@ -219,7 +218,6 @@ class TrainConfig:
     mode: str = "train"
 
 
-OmegaConf.register_new_resolver("context_type", lambda x: ContextType(x.lower()))
 cs = ConfigStore.instance()
 cs.store(group="train", name="base", node=TrainConfig)
 

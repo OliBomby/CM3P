@@ -15,7 +15,7 @@ from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NA
 
 from cm3p import CM3PConfig
 from cm3p.parsing_cm3p import CM3PBeatmapParser, load_beatmap, get_song_length
-from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata
+from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata, merge_metadata_dicts
 
 if is_torch_available():
     import torch
@@ -91,19 +91,20 @@ def get_metadata(
         speed: float = 1.0,
         song_position: Optional[float] = None,
 ) -> CM3PMetadata:
-    mode = beatmap_metadata["ModeInt"] if beatmap_metadata is not None else None
+    mode = beatmap.mode if beatmap is not None else beatmap_metadata["ModeInt"] if beatmap_metadata is not None else None
+    circle_size = beatmap.circle_size if beatmap is not None else beatmap_metadata["Cs"] if beatmap_metadata is not None else None
     song_length = get_song_length(audio_samples, sampling_rate, beatmap)
     return CM3PMetadata(
         difficulty=get_difficulty(beatmap_metadata, speed) if beatmap_metadata is not None else None,
         year=beatmap_metadata["SubmittedDate"].year if beatmap_metadata is not None else None,
         mode=mode,
         mapper=beatmap_metadata["UserId"] if beatmap_metadata is not None else None,
-        cs=beatmap_metadata["CircleSize"] if mode in [0, 2] and beatmap_metadata is not None else None,
+        cs=circle_size if mode in [0, 2] is not None else None,
         hitsounded=get_hitsounded_status(beatmap) if beatmap is not None else None,
         song_length=song_length,
         song_position=song_position,
         global_sv=beatmap.slider_multiplier if mode in [0, 2] and beatmap is not None else None,
-        mania_keycount=int(beatmap.circle_size) if mode == 3 and beatmap is not None else None,
+        mania_keycount=int(circle_size) if mode == 3 and beatmap is not None else None,
         hold_note_ratio=get_hold_note_ratio(beatmap) if mode == 3 and beatmap is not None else None,
         scroll_speed_ratio=get_scroll_speed_ratio(beatmap) if mode in [1, 3] and beatmap is not None else None,
         tags=beatmap_metadata["TopTagIds"] if beatmap_metadata is not None else None,
@@ -272,11 +273,12 @@ class CM3PProcessor(ProcessorMixin):
 
         return audio, num_audio_tokens
 
-    def _retrieve_input_features(self, audio, max_source_positions, **kwargs) -> torch.Tensor:
+    def _retrieve_input_features(self, audio, max_source_positions, **kwargs) -> Union[torch.Tensor, np.ndarray]:
         """
         Handles specific logic of CM3P expected input features: audio arrays should be padded to next multiple of 480000 (duration is a multiple of 30s), see CM3PProcessorKwargs' default audio_kwargs.
         Then mel input features are extracted and stacked along batch dimension, splitting into chunks of max_source_positions.
         """
+        return_tensors = kwargs.get("return_tensors", "pt")
         input_features_list = []
         for audio_array in audio:
             audio_inputs = self.audio_feature_extractor(audio_array, **kwargs)
@@ -286,9 +288,12 @@ class CM3PProcessor(ProcessorMixin):
                 self.audio_feature_extractor.feature_size, -1, max_source_positions
             )
 
-            input_features_list.append(input_features.transpose(0, 1))
+            input_features_list.append(input_features.swapaxes(0, 1))
 
-        return torch.cat(input_features_list)
+        if return_tensors == "pt":
+            return torch.cat(input_features_list)
+
+        return np.concatenate(input_features_list)
 
     def _load_audio(
         self,
@@ -347,7 +352,7 @@ class CM3PProcessor(ProcessorMixin):
         used_keys = set()
 
         # pass defaults to output dictionary
-        output_kwargs.update(self.default_kwargs)
+        output_kwargs.update(copy.deepcopy(self.default_kwargs))
 
         # update modality kwargs with passed kwargs
         non_modality_kwargs = set(kwargs) - set(output_kwargs)
@@ -424,8 +429,8 @@ class CM3PProcessor(ProcessorMixin):
 
         metadata_encoding, beatmap_encoding, num_audio_tokens = None, None, None
 
-        if return_tensors != "pt":
-            raise ValueError(f"{self.__class__.__name__} only supports `return_tensors='pt'`.")
+        if return_tensors is not None and return_tensors != "pt":
+            raise ValueError(f"{self.__class__.__name__} only supports `return_tensors='pt'` or `return_tensors=None`.")
 
         if metadata is None and beatmap is None:
             raise ValueError("You have to specify either metadata or beatmap. Both cannot be none.")
@@ -460,23 +465,30 @@ class CM3PProcessor(ProcessorMixin):
             else:
                 metadata = [CM3PMetadata()] * len(beatmap) if populate_metadata else [None] * len(beatmap)
 
+            new_metadata = []
             batch_start_ms = []
             batch_groups = []
             batch_audio = []
             batch_num_audio_tokens = []
-            new_metadata = []
             for b, m, audio_array in zip(beatmap, metadata, audio):
                 song_length = get_song_length(audio_array, sampling_rate, b)
                 b: Beatmap = load_beatmap(b)
                 beatmap_groups = self.beatmap_parser.parse_beatmap(b, speed=speed, song_length=song_length)
 
-                if populate_metadata and not multiply_metadata:
-                    new_metadata.append(m | get_metadata(
-                        beatmap=b,
-                        audio_samples=audio_array,
-                        sampling_rate=sampling_rate,
-                        speed=speed,
-                    ))
+                def add_metadata(song_position: Optional[float] = None):
+                    if populate_metadata:
+                        new_metadata.append(merge_metadata_dicts(m, get_metadata(
+                            beatmap=b,
+                            audio_samples=audio_array,
+                            sampling_rate=sampling_rate,
+                            speed=speed,
+                            song_position=song_position,
+                        )))
+                    else:
+                        new_metadata.append(m)
+
+                if not multiply_metadata:
+                    add_metadata()
 
                 # Loop through with sliding window
                 groups_search_index = 0
@@ -516,14 +528,8 @@ class CM3PProcessor(ProcessorMixin):
                     batch_audio.append(audio_slice)
                     batch_num_audio_tokens.append(num_audio_tokens)
 
-                    if populate_metadata and not multiply_metadata:
-                        new_metadata.append(m | get_metadata(
-                            beatmap=b,
-                            audio_samples=audio_array,
-                            sampling_rate=sampling_rate,
-                            speed=speed,
-                            song_position=start_sec / song_length,
-                        ))
+                    if multiply_metadata:
+                        add_metadata(start_sec / song_length)
 
             metadata = new_metadata
 
@@ -546,9 +552,10 @@ class CM3PProcessor(ProcessorMixin):
             if metadata_dropout_prob > 0.0:
                 for m in metadata:
                     # Randomly drop out metadata fields
-                    for field in CM3PMetadata.__annotations__.keys():
-                        if getattr(m, field) is not None and np.random.rand() < metadata_dropout_prob:
-                            setattr(m, field, None)
+                    for key, value in m.items():
+                        if value is not None and np.random.rand() < metadata_dropout_prob:
+                            # noinspection PyTypedDict
+                            m[key] = None
 
             metadata_encoding = self.metadata_tokenizer(
                 metadata,

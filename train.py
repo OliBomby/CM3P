@@ -4,6 +4,7 @@ import sys
 
 import hydra
 import transformers
+from torch.utils.data import DataLoader
 from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers import Trainer
 from transformers.trainer_utils import get_last_checkpoint, set_seed
@@ -13,7 +14,7 @@ from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
 from config import TrainConfig
-
+from mmrs_dataset import MmrsDataset
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 @hydra.main(config_path="configs/train", config_name="v1", version_base="1.1")
 def main(args: TrainConfig):
     # 1. Parse input arguments
-    training_args = TrainingArguments(**args.training.to_dict())
+    training_args = TrainingArguments(**args.training)
 
     # 2. Setup logging
     logging.basicConfig(
@@ -45,7 +46,7 @@ def main(args: TrainConfig):
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}, "
         + f"distributed training: {training_args.parallel_mode.value == 'distributed'}, 16-bits training: {training_args.bf16}"
     )
-    logger.info(f"Training/evaluation parameters {training_args}")
+    # logger.info(f"Training/evaluation parameters {training_args}")
 
     # 3. Detecting last checkpoint and eventually continue from last checkpoint
     last_checkpoint = None
@@ -62,10 +63,6 @@ def main(args: TrainConfig):
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
-    # 4. Load dataset
-    train_dataset = None
-    eval_dataset = None
-
     # 5. Load pretrained model, tokenizer, and image processor
     test_beatmap_tokenizer_config = {}
 
@@ -81,6 +78,25 @@ def main(args: TrainConfig):
         CM3PMetadataTokenizer(vocab_init=test_metadata_tokenizer_config),
     )
 
+    # 4. Load dataset
+    train_dataset = MmrsDataset(
+        args.data,
+        processor=processor,
+        test=False,
+    )
+    eval_dataset = MmrsDataset(
+        args.data,
+        processor=processor,
+        test=True,
+    )
+
+    # Test some data loading
+    train_dataloader = DataLoader(train_dataset, batch_size=16, num_workers=0)
+    for batch in train_dataloader:
+        print(batch)
+        print(processor.metadata_tokenizer.batch_decode(batch['metadata_ids'].numpy()[:, :20]))
+        break
+
     config = CM3PConfig(attn_implementation="flash_attention_2")
     config.beatmap_config.vocab_size = processor.beatmap_tokenizer.vocab_size
     config.beatmap_config.audio_token_id = processor.beatmap_tokenizer.convert_tokens_to_ids(processor.beatmap_tokenizer.audio_token)
@@ -93,11 +109,11 @@ def main(args: TrainConfig):
         for param in module.parameters():
             param.requires_grad = False
 
-    if model_args.freeze_vision_model:
-        _freeze_params(model.vision_model)
+    if args.freeze_beatmap_model:
+        _freeze_params(model.beatmap_model)
 
-    if model_args.freeze_text_model:
-        _freeze_params(model.text_model)
+    if args.freeze_metadata_model:
+        _freeze_params(model.metadata_model)
 
     # set seed for torch dataloaders
     set_seed(training_args.seed)

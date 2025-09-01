@@ -4,7 +4,6 @@ defaults:
 training:
   output_dir: 'trainer_output'
   report_to: 'wandb'
-  should_log: true
   use_cpu: false
   bf16: true
   do_train: true
@@ -19,7 +18,6 @@ training:
   weight_decay: 0.0
   eval_strategy: 'steps'
   eval_steps: 500
-  num_train_epochs: null
   max_steps: 60000
   logging_strategy: 'steps'
   logging_steps: 10
@@ -30,11 +28,13 @@ training:
   metric_for_best_model: 'loss'
   greater_is_better: false
   push_to_hub: false
+  dataloader_drop_last: true
 
 data:                  # Data settings
-  sample_rate: ${..model.spectrogram.sample_rate}
+  sampling_rate: ${..model.spectrogram.sampling_rate}
   hop_length: ${..model.spectrogram.hop_length}
   cycle_length: 16
+  drop_last: true
   only_last_beatmap: false  # Only use the last beatmap in the mapset
   center_pad_decoder: false            # Center pad decoder input
   num_diff_classes: 24  # Number of difficulty classes
@@ -71,8 +71,8 @@ data:                  # Data settings
   normalize_audio: true  # Normalize audio data
   slider_version: 1  # Slider version to use (1 or 2)
   dataset_type: "mmrs"
-  train_dataset_path: "/workspace/datasets/MMRS39389"
-  test_dataset_path: "/workspace/datasets/MMRS39389"
+  train_dataset_paths: ["/workspace/datasets/MMRS39389"]
+  test_dataset_paths: ["/workspace/datasets/MMRS39389"]
   train_dataset_start: 0
   train_dataset_end: 38689
   test_dataset_start: 38689
@@ -101,13 +101,6 @@ data:                  # Data settings
   src_seq_len: 4096
   tgt_seq_len: 8192
   rhythm_weight: 1.0    # Weight of rhythm tokens in the loss calculation
-  context_types:       # List of context types to include in the dataset
-    - "in": ['${context_type:none}']
-      "out": ['${context_type:timing}', '${context_type:kiai}', '${context_type:map}', '${context_type:sv}']
-    - "in": ['${context_type:no_hs}']
-      "out": ['${context_type:timing}', '${context_type:kiai}', '${context_type:map}', '${context_type:sv}']
-    - "in": ['${context_type:gd}']
-      "out": ['${context_type:timing}', '${context_type:kiai}', '${context_type:map}', '${context_type:sv}']
   context_weights: [4, 1, 1]    # List of weights for each context type. Determines how often each context type is sampled
   mappers_path: "./datasets/beatmap_users.json"       # Path to file with all beatmap mappers
   add_timing: false      # Interweave timing tokens with the beatmap tokens

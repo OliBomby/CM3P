@@ -314,6 +314,19 @@ class CM3PMetadata(TypedDict, total=False):
     tags: list[Union[int, str]]  # List of beatmap tag IDs or names
 
 
+def merge_metadata_dicts(m1, m2):
+    if m1 is None:
+        return m2
+    if m2 is None:
+        return m1
+    merged = {}
+    for key in CM3PMetadata.__annotations__.keys():
+        v1 = m1.get(key, None)
+        v2 = m2.get(key, None)
+        merged[key] = v2 if v1 is None else v1
+    return CM3PMetadata(**merged)
+
+
 class CM3PMetadataTokenizer(PreTrainedTokenizer):
     model_input_names: list[str] = ["input_ids"]
     vocab_files_names: dict[str, str] = {"vocab_file": "vocab.json"}
@@ -548,20 +561,19 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         return f"[SCROLL_SPEED_RATIO_{scroll_speed_ratio:.1f}]"
 
     def _tokenize_tags(self, metadata: CM3PMetadata):
-        tags = metadata.get('tags', []).copy()
-        i = 0
-        while i < len(tags):
-            if isinstance(tags[i], int):
-                tag_id = tags[i]
-                if tag_id in self.tags:
-                    tags[i] = self.tags[tag_id]['name']
-                else:
-                    tags.pop(i)
-                    continue
-            i += 1
-        if not tags:
+        tags = metadata.get('tags', None)
+        if tags is None:
             return [self.tag_unk_token]
-        return [f"[TAG_{tag}]" for tag in tags]
+        new_tags = []
+        for tag in tags:
+            if isinstance(tag, str):
+                new_tags.append(tag)
+            else:
+                if tag in self.tags:
+                    new_tags.append(self.tags[tag]['name'])
+        if not new_tags:
+            return [self.tag_unk_token]
+        return [f"[TAG_{tag}]" for tag in new_tags]
 
     def _tokenize_metadata(self, metadata: CM3PMetadata):
         tokens = [
@@ -644,4 +656,4 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 AutoTokenizer.register(CM3PBeatmapConfig, CM3PBeatmapTokenizer)
 AutoTokenizer.register(CM3PMetadataConfig, CM3PMetadataTokenizer)
 
-__all__ = ["CM3PBeatmapTokenizer", "CM3PMetadataTokenizer", "CM3PMetadata"]
+__all__ = ["CM3PBeatmapTokenizer", "CM3PMetadataTokenizer", "CM3PMetadata", "merge_metadata_dicts"]

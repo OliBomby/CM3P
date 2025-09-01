@@ -2,6 +2,3 @@ defaults:
   - default
   - ../model@model: v1
   - _self_
-
-
-

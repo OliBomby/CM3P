@@ -1,6 +1,9 @@
 defaults:
   - /train/base@_here_
 
+freeze_beatmap_model: false  # Whether to freeze the beatmap model during training
+freeze_metadata_model: false  # Whether to freeze the metadata model during training
+
 training:
   output_dir: 'trainer_output'
   report_to: 'wandb'
@@ -29,98 +32,101 @@ training:
   greater_is_better: false
   push_to_hub: false
   dataloader_drop_last: true
+  dataloader_num_workers: 4
 
-data:                  # Data settings
-  sampling_rate: ${..model.spectrogram.sampling_rate}
-  hop_length: ${..model.spectrogram.hop_length}
-  cycle_length: 16
-  drop_last: true
-  only_last_beatmap: false  # Only use the last beatmap in the mapset
-  center_pad_decoder: false            # Center pad decoder input
-  num_diff_classes: 24  # Number of difficulty classes
-  max_diff: 12          # Maximum difficulty of difficulty classes
-  num_cs_classes: 21     # Number of circle size classes
-  class_dropout_prob: 0.2
-  diff_dropout_prob: 0.2
-  mapper_dropout_prob: 0.2
-  cs_dropout_prob: 0.2
-  year_dropout_prob: 0.2
-  hold_note_ratio_dropout_prob: 0.2
-  scroll_speed_ratio_dropout_prob: 0.2
-  tag_dropout_prob: 0.2
-  add_empty_sequences: true
-  add_empty_sequences_at_step: -1
-  add_pre_tokens_at_step: -1
-  max_pre_token_len: -1
-  timing_random_offset_2: 0
-  timing_random_offset_prob: 1.0  # Probability of using random timing offset
-  add_gd_context: false  # Prefix the decoder with tokens of another beatmap in the mapset
-  min_difficulty: 0     # Minimum difficulty to consider including in the dataset
-  max_difficulty: 100   # Maximum difficulty to consider including in the dataset
-  sample_weights_path: ''    # Path to sample weights
-  label_smoothing: 0.0  # Label smoothing for the loss calculation
-  lookback: 0             # Fraction of audio sequence to fill with tokens from previous inference window
-  lookahead: 0            # Fraction of audio sequence to skip at the end of the audio window
-  lookback_prob: 0.0  # Probability of using the lookback augmentation for a beatmap in the dataset
-  tags_path: ''   # Path to file with all beatmap tags
-  position_range: [-256, 768, -256, 640]  # Range of hit object coordinates
+processor:
+  audio_feature_extractor:
+    feature_size: 80
+    sampling_rate: 16000
+    hop_length: 160
+    chunk_length: 30
+    n_fft: 400
+    padding_value: 0
+    dither: 0
+    return_attention_mask: false
+
+  beatmap_parser:
+    add_timing: true
+    add_snapping: true
+    add_timing_points: true
+    add_hitsounds: true
+    add_distances: true
+    add_positions: true
+    add_kiai: true
+    add_sv: true
+    add_mania_sv: true
+    mania_bpm_normalized_scroll_speed: true
+    position_split_axes: true
+    slider_version: 2
+
+  beatmap_tokenizer:
+    min_time: 0
+    max_time: 30000
+    time_step: 10
+    max_distance: 640
+    distance_step: 4
+    position_range: [-256, 768, -256, 640]
+    position_step: 4
+    position_split_axes: True
+
+  metadata_tokenizer:
+    min_difficculty: 0.0
+    max_difficulty: 14.0
+    difficulty_step: 0.1
+    min_year: 2000
+    max_year: 2023
+    max_song_length: 600
+    song_length_step: 10
+    song_position_step: 0.01
+    global_sv_step: 0.01
+    hold_note_ratio_step: 0.1
+    scroll_speed_ratio_step: 0.1
+
+  default_kwargs:
+      beatmap_kwargs:
+        max_length: 8000
+        padding: 'longest'
+        truncation: 'longest_first'
+        window_length_sec: 30.0
+        window_stride_sec: 30.0
+
+      metadata_kwargs:
+        max_length: 128
+        padding: 'longest'
+        truncation: 'longest_first'
+
+      audio_kwargs:
+        sampling_rate: ${...audio_feature_extractor.sampling_rate}
+        padding: true
+        truncation: false
+        pad_to_multiple_of: 480000
+        max_source_positions: 3000
+        hop_length: ${...audio_feature_extractor.hop_length}
+        window_size: ${...audio_feature_extractor.n_fft}
+        audio_length_per_tok: 8
+
+      common_kwargs:
+        return_tensors: "pt"
+
+dataset:                  # Data settings
+  train_dataset_paths: [ "/workspace/datasets/MMRS39389", "/workspace/datasets/MMUS40000" ]  # Training dataset directory
+  train_dataset_start: 0  # Training dataset start index
+  train_dataset_end: 78689  # Training dataset end index
+  test_dataset_paths: [ "/workspace/datasets/MMRS39389", "/workspace/datasets/MMUS40000" ]  # Testing/validation dataset directory
+  test_dataset_start: 78689  # Testing/validation dataset start index
+  test_dataset_end: 79389  # Testing/validation dataset end index
+  cycle_length: 16  # Number of files to cycle through when loading data to increase batch variety
+  drop_last: true  # Drop last incomplete batch
+  gamemodes: [ 0, 1, 2, 3 ]  # List of gamemodes to include in the dataset
+  min_year: 2000  # Minimum year of the beatmap to include in the dataset
+  max_year: 2023  # Maximum year of the beatmap to include in the dataset
+  min_difficulty: 0  # Minimum difficulty to consider including in the dataset
+  max_difficulty: 14  # Maximum difficulty to consider including in the dataset
+  metadata_dropout_prob: 0.2  # Probability of dropping metadata during training
+  dt_augment_prob: 0.5  # Probability of augmenting the dataset with DT
+  dt_augment_range: [ 1.25, 1.5 ]  # Range of DT augmentation
   dt_augment_sqrt: false  # Sample DT augmentation from a square root distribution
-  min_year: null  # Minimum year of the beatmap to include in the dataset
-  max_year: null  # Maximum year of the beatmap to include in the dataset
-  frame_offset_augment_prob: 1.0  # Probability of augmenting beatmap sequences with frame offset
-  normalize_audio: true  # Normalize audio data
-  slider_version: 1  # Slider version to use (1 or 2)
-  dataset_type: "mmrs"
-  train_dataset_paths: ["/workspace/datasets/MMRS39389"]
-  test_dataset_paths: ["/workspace/datasets/MMRS39389"]
-  train_dataset_start: 0
-  train_dataset_end: 38689
-  test_dataset_start: 38689
-  test_dataset_end: 39389
-  num_classes: 152680
-  # All Special Prefix Tokens
-  add_out_context_types: true  # Add tokens indicating types of the out context
-  add_gamemode_token: true
-  add_style_token: false
-  add_diff_token: false
-  add_mapper_token: false
-  add_year_token: true
-  add_hitsounded_token: true  # Add token for whether the map has hitsounds
-  add_song_length_token: false  # Add token for the length of the song
-  add_global_sv_token: true  # Add token for the global slider velocity in std and ctb
-  add_cs_token: true
-  add_keycount_token: true  # Add token for the number of keys in mania
-  add_hold_note_ratio_token: true  # Add token for the ratio of hold notes in mania
-  add_scroll_speed_ratio_token: true  # Add token for the scroll speed ratio in mania
-  add_tags: true  # Add beatmap tag tokens
-  add_sv_special_token: true  # Add token for last SV value
-  add_kiai_special_token: true  # Add token for last kiai state
-  add_song_position_token: false  # Add token for the position of the song in the mapset
-  # ---
-  timing_random_offset: 2
-  src_seq_len: 4096
-  tgt_seq_len: 8192
-  rhythm_weight: 1.0    # Weight of rhythm tokens in the loss calculation
-  context_weights: [4, 1, 1]    # List of weights for each context type. Determines how often each context type is sampled
-  mappers_path: "./datasets/beatmap_users.json"       # Path to file with all beatmap mappers
-  add_timing: false      # Interweave timing tokens with the beatmap tokens
-  add_snapping: true    # Model hit object snapping
-  add_timing_points: true  # Model beatmap timing with timing points
-  add_hitsounds: true   # Model beatmap hitsounds
-  add_pre_tokens: false
-  per_track: true
-  add_distances: true   # Model hit object distances
-  add_positions: true
-  position_precision: 4 # Precision of hit object coordinates
-  position_split_axes: true  # Split hit object X and Y coordinates into separate tokens
-  dt_augment_prob: 0.5   # Probability of augmenting the dataset with DT
-  dt_augment_range: [1.25, 1.5]  # Range of DT augmentation
-  types_first: true       # Put the type token at the start of the group before the timeshift token
-  add_kiai: false        # Model kiai times
-  gamemodes: [0, 1, 2, 3]  # List of gamemodes to include in the dataset
-  mania_bpm_normalized_scroll_speed: true  # Normalize mania scroll speed by BPM
-  add_sv: true  # Model slider velocity in std and ctb
-  add_mania_sv: false  # Add mania scroll velocity in map context
+  sampling_rate: ${..processor.audio_feature_extractor.sampling_rate}  # Audio sampling rate
 
 hydra:
   job:

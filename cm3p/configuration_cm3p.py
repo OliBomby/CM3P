@@ -15,7 +15,7 @@ class CM3PMetadataConfig(PretrainedConfig):
         self,
         projection_dim=512,
         initializer_factor=1.0,
-        # stuff
+
         vocab_size=1000,
         hidden_size=256,
         intermediate_size=512,
@@ -30,8 +30,6 @@ class CM3PMetadataConfig(PretrainedConfig):
         pad_token_id=0,
         bos_token_id=1,
         eos_token_id=2,
-        cls_token_id=3,
-        sep_token_id=4,
         global_rope_theta=10000.0,
         attention_bias=False,
         attention_dropout=0.0,
@@ -43,18 +41,13 @@ class CM3PMetadataConfig(PretrainedConfig):
         mlp_dropout=0.0,
         decoder_bias=True,
         deterministic_flash_attn=False,
-        sparse_prediction=False,
-        sparse_pred_ignore_index=-100,
         reference_compile=None,
-        repad_logits_with_grad=False,
         **kwargs,
     ):
         super().__init__(
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
             eos_token_id=eos_token_id,
-            cls_token_id=cls_token_id,
-            sep_token_id=sep_token_id,
             **kwargs,
         )
 
@@ -120,10 +113,7 @@ class CM3PAudioConfig(PretrainedConfig):
         mlp_dropout=0.0,
         decoder_bias=True,
         deterministic_flash_attn=False,
-        sparse_prediction=False,
-        sparse_pred_ignore_index=-100,
         reference_compile=None,
-        repad_logits_with_grad=False,
 
         projector_intermediate_size=2048,  # 4 * hidden_size for a 4x reduction in tokens
         projector_dim=768,
@@ -188,14 +178,14 @@ class CM3PBeatmapConfig(PretrainedConfig):
 
     def __init__(
         self,
-        audio_config: CM3PAudioConfig = None,
+        audio_config: dict = None,
         audio_sos_token_id=3164,
         audio_eos_token_id=3165,
         audio_token_id=3166,
-        # stuff
+
         projection_dim=512,
         initializer_factor=1.0,
-        # stuff
+
         vocab_size=3167,
         hidden_size=768,
         intermediate_size=1152,
@@ -210,8 +200,6 @@ class CM3PBeatmapConfig(PretrainedConfig):
         pad_token_id=0,
         bos_token_id=1,
         eos_token_id=2,
-        cls_token_id=3,
-        sep_token_id=4,
         global_rope_theta=160000.0,
         attention_bias=False,
         attention_dropout=0.0,
@@ -233,8 +221,6 @@ class CM3PBeatmapConfig(PretrainedConfig):
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
             eos_token_id=eos_token_id,
-            cls_token_id=cls_token_id,
-            sep_token_id=sep_token_id,
             **kwargs,
         )
 

@@ -1,221 +1,107 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from hydra.core.config_store import ConfigStore
-from omegaconf import OmegaConf, MISSING
-from transformers import TrainingArguments
-
-
-# Default config here based on V28
-
-@dataclass
-class SpectrogramConfig:
-    implementation: str = "nnAudio"  # Spectrogram implementation (nnAudio/torchaudio)
-    log_scale: bool = False
-    sampling_rate: int = 16000
-    hop_length: int = 128
-    n_fft: int = 1024
-    n_mels: int = 388
-    f_min: int = 0
-    f_max: int = 8000
-    pad_mode: str = "constant"
 
 
 @dataclass
-class ModelConfig:
-    name: str = "openai/whisper-base"  # Model name
-    config_base: str = ""  # Model base for config lookup
-    input_features: bool = True
-    project_encoder_input: bool = True
-    embed_decoder_input: bool = True
-    manual_norm_weights: bool = False
-    do_style_embed: bool = False
-    do_difficulty_embed: bool = False
-    do_mapper_embed: bool = False
-    do_song_position_embed: bool = False
-    cond_dim: int = 128
-    cond_size: int = 0
-    rope_type: str = "dynamic"  # RoPE type (dynamic/static)
-    rope_encoder_scaling_factor: float = 1.0
-    rope_decoder_scaling_factor: float = 1.0
-    spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
-    overwrite: dict = field(default_factory=lambda: {})  # Overwrite model config
-    add_config: dict = field(default_factory=lambda: {})  # Add to model config
+class AudioFeatureExtractorConfig:
+    feature_size: int
+    sampling_rate: int
+    hop_length: int
+    chunk_length: int
+    n_fft: int
+    padding_value: float
+    dither: float
+    return_attention_mask: bool
 
 
 @dataclass
-class DataConfig:
-    dataset_type: str = "mmrs"   # Dataset type (ors/mmrs)
-    train_dataset_paths: list[str] = field(default_factory=lambda: ["/workspace/datasets/MMRS39389", "/workspace/datasets/MMUS40000"])  # Training dataset directory
-    train_dataset_start: int = 0  # Training dataset start index
-    train_dataset_end: int = 38689  # Training dataset end index
-    test_dataset_paths: list[str] = field(default_factory=lambda: ["/workspace/datasets/MMRS39389", "/workspace/datasets/MMUS40000"])  # Testing/validation dataset directory
-    test_dataset_start: int = 38689  # Testing/validation dataset start index
-    test_dataset_end: int = 39389  # Testing/validation dataset end index
-    metadata_dropout_prob: float = 0.2  # Probability of dropping metadata during training
-    cycle_length: int = 16
-    drop_last: bool = True  # Drop last incomplete batch
-
-    src_seq_len: int = 1024
-    tgt_seq_len: int = 2048
-    sampling_rate: int = 16000
-    hop_length: int = 128
-    per_track: bool = True  # Loads all beatmaps in a track sequentially which optimizes audio data loading
-    only_last_beatmap: bool = False  # Only use the last beatmap in the mapset
-    center_pad_decoder: bool = False  # Center pad decoder input
-    num_classes: int = 152680
-    num_diff_classes: int = 24  # Number of difficulty classes
-    max_diff: int = 12  # Maximum difficulty of difficulty classes
-    num_cs_classes: int = 21  # Number of circle size classes
-    class_dropout_prob: float = 0.2
-    diff_dropout_prob: float = 0.2
-    mapper_dropout_prob: float = 0.2
-    cs_dropout_prob: float = 0.2
-    year_dropout_prob: float = 0.2
-    hold_note_ratio_dropout_prob: float = 0.2
-    scroll_speed_ratio_dropout_prob: float = 0.2
-    tag_dropout_prob: float = 0.2
-    # All Special Prefix Tokens
-    add_out_context_types: bool = True  # Add tokens indicating types of the out context
-    add_gamemode_token: bool = True
-    add_style_token: bool = False
-    add_diff_token: bool = True
-    add_mapper_token: bool = True
-    add_year_token: bool = True
-    add_hitsounded_token: bool = True  # Add token for whether the map has hitsounds
-    add_song_length_token: bool = True  # Add token for the length of the song
-    add_global_sv_token: bool = True  # Add token for the global slider velocity in std and ctb
-    add_cs_token: bool = True
-    add_keycount_token: bool = True  # Add token for the number of keys in mania
-    add_hold_note_ratio_token: bool = True  # Add token for the ratio of hold notes in mania
-    add_scroll_speed_ratio_token: bool = True  # Add token for the scroll speed ratio in mania
-    add_tags: bool = True  # Add beatmap tag tokens
-    add_sv_special_token: bool = True  # Add token for last SV value
-    add_kiai_special_token: bool = True  # Add token for last kiai state
-    add_song_position_token: bool = True  # Add token for the position of the song in the mapset
-    # ---
-    add_empty_sequences: bool = True
-    add_empty_sequences_at_step: int = -1
-    add_pre_tokens: bool = False
-    add_pre_tokens_at_step: int = -1
-    max_pre_token_len: int = -1
-    timing_random_offset: int = 2
-    timing_random_offset_2: int = 0
-    timing_random_offset_prob: float = 1.0  # Probability of using random timing offset
-    add_gd_context: bool = False  # Prefix the decoder with tokens of another beatmap in the mapset
-    min_difficulty: float = 0  # Minimum difficulty to consider including in the dataset
-    max_difficulty: float = 100  # Maximum difficulty to consider including in the dataset
-    sample_weights_path: str = ''  # Path to sample weights
-    rhythm_weight: float = 3.0  # Weight of rhythm tokens in the loss calculation
-    label_smoothing: float = 0.0  # Label smoothing for the loss calculation
-    lookback: float = 0  # Fraction of audio sequence to fill with tokens from previous inference window
-    lookahead: float = 0  # Fraction of audio sequence to skip at the end of the audio window
-    lookback_prob: float = 0.0  # Probability of using the lookback augmentation for a beatmap in the dataset
-    context_weights: list[float] = field(default_factory=lambda: [4, 1, 1])  # List of weights for each context type. Determines how often each context type is sampled
-    tags_path: str = ''  # Path to file with all beatmap descriptors
-    mappers_path: str = ''  # Path to file with all beatmap mappers
-    add_timing: bool = False  # Add beatmap timing to map context
-    add_snapping: bool = True  # Model hit object snapping
-    add_timing_points: bool = True  # Model beatmap timing with timing points
-    add_hitsounds: bool = True  # Model beatmap hitsounds
-    add_distances: bool = True  # Model hit object distances
-    add_positions: bool = True  # Model hit object coordinates
-    position_precision: int = 32  # Precision of hit object coordinates
-    position_split_axes: bool = False  # Split hit object X and Y coordinates into separate tokens
-    position_range: list[int] = field(default_factory=lambda: [-256, 768, -256, 640])  # Range of hit object coordinates
-    dt_augment_prob: float = 0.5  # Probability of augmenting the dataset with DT
-    dt_augment_range: list[float] = field(default_factory=lambda: [1.25, 1.5])  # Range of DT augmentation
-    dt_augment_sqrt: bool = False  # Sample DT augmentation from a square root distribution
-    types_first: bool = True  # Put the type token at the start of the group before the timeshift token
-    add_kiai: bool = True  # Add kiai times to map context
-    gamemodes: list[int] = field(default_factory=lambda: [0, 1, 2, 3])  # List of gamemodes to include in the dataset
-    mania_bpm_normalized_scroll_speed: bool = True  # Normalize mania scroll speed by BPM
-    add_sv: bool = True  # Model slider velocity in std and ctb
-    add_mania_sv: bool = False  # Add mania scroll velocity in map context
-    min_year: Optional[int] = None  # Minimum year of the beatmap to include in the dataset
-    max_year: Optional[int] = None  # Maximum year of the beatmap to include in the dataset
-    frame_offset_augment_prob: float = 1.0  # Probability of augmenting beatmap sequences with frame offset
-    normalize_audio: bool = True  # Normalize audio data
-    slider_version: int = 1  # Slider version to use (1 or 2)
+class BeatmapParserConfig:
+    add_timing: bool
+    add_snapping: bool
+    add_timing_points: bool
+    add_hitsounds: bool
+    add_distances: bool
+    add_positions: bool
+    add_kiai: bool
+    add_sv: bool
+    add_mania_sv: bool
+    mania_bpm_normalized_scroll_speed: bool
+    position_split_axes: bool
+    slider_version: int
 
 
 @dataclass
-class DataloaderConfig:
-    num_workers: int = 8
-    pin_memory: bool = True
-    drop_last: bool = False
+class BeatmapTokenizerConfig:
+    min_time: int
+    max_time: int
+    time_step: int
+    max_distance: int
+    distance_step: int
+    position_range: tuple[int, int, int, int]
+    position_step: int
+    position_split_axes: bool
 
 
 @dataclass
-class OptimizerConfig:  # Optimizer settings
-    name: str = "adamwscale"  # Optimizer
-    base_lr: float = 1e-2
-    base_lr_2: float = 3e-4        # Secondary learning rate for the internal optimizer
-    batch_size: int = 128  # Batch size per GPU
-    total_steps: int = 65536
-    warmup_steps: int = 10000
-    sustain_steps: int = 0  # Steps to sustain the learning rate after warmup
-    lr_scheduler: str = "cosine"
-    weight_decay: float = 0.0
-    grad_clip: float = 1.0
-    grad_acc: int = 8
-    final_cosine: float = 1e-5
+class MetadataTokenizerConfig:
+    min_difficculty: float
+    max_difficulty: float
+    difficulty_step: float
+    min_year: int
+    max_year: int
+    max_song_length: int
+    song_length_step: int
+    song_position_step: float
+    global_sv_step: float
+    hold_note_ratio_step: float
+    scroll_speed_ratio_step: float
+    modes: Optional[dict[int, str]] = None
+    mappers: Optional[dict[int, str]] = None
+    tags: Optional[dict[int, dict]] = None
 
 
 @dataclass
-class EvalConfig:
-    every_steps: int = 1000
-    steps: int = 500
+class ProcessorConfig:
+    audio_feature_extractor: AudioFeatureExtractorConfig
+    beatmap_parser: BeatmapParserConfig
+    beatmap_tokenizer: BeatmapTokenizerConfig
+    metadata_tokenizer: MetadataTokenizerConfig
+    default_kwargs: Optional[dict]
 
 
 @dataclass
-class CheckpointConfig:
-    every_steps: int = 5000
-
-
-@dataclass
-class LoggingConfig:
-    log_with: str = 'wandb'     # Logging service (wandb/tensorboard)
-    every_steps: int = 10
-    grad_l2: bool = True
-    weights_l2: bool = True
-    mode: str = 'online'
-
-
-@dataclass
-class ProfileConfig:
-    do_profile: bool = False
-    early_stop: bool = False
-    wait: int = 8
-    warmup: int = 8
-    active: int = 8
-    repeat: int = 1
+class DataSetConfig:
+    train_dataset_paths: list[str]
+    train_dataset_start: int
+    train_dataset_end: int
+    test_dataset_paths: list[str]
+    test_dataset_start: int
+    test_dataset_end: int
+    cycle_length: int
+    drop_last: bool
+    gamemodes: list[int]
+    min_year: Optional[int]
+    max_year: Optional[int]
+    min_difficulty: float
+    max_difficulty: float
+    metadata_dropout_prob: float
+    dt_augment_prob: float
+    dt_augment_range: list[float]
+    dt_augment_sqrt: bool
+    sampling_rate: int
 
 
 @dataclass
 class TrainConfig:
-    training: dict = field(default_factory=dict)  # TrainingArguments
-    freeze_beatmap_model: bool = False
-    freeze_metadata_model: bool = False
+    freeze_beatmap_model: bool
+    freeze_metadata_model: bool
 
-    compile: bool = True
-    device: str = "gpu"
-    precision: str = "bf16"
-    seed: int = 42
-    flash_attention: bool = False
-    checkpoint_path: str = ""
-    pretrained_path: str = ""
-    pretrained_t5_compat: bool = False
-    model: ModelConfig = field(default_factory=ModelConfig)
-    data: DataConfig = field(default_factory=DataConfig)
-    dataloader: DataloaderConfig = field(default_factory=DataloaderConfig)
-    optim: OptimizerConfig = field(default_factory=OptimizerConfig)
-    eval: EvalConfig = field(default_factory=EvalConfig)
-    checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
-    logging: LoggingConfig = field(default_factory=LoggingConfig)
-    profile: ProfileConfig = field(default_factory=ProfileConfig)
-    hydra: Any = MISSING
-    mode: str = "train"
+    training: dict
+    processor: ProcessorConfig
+    dataset: DataSetConfig
+    model: dict
 
 
 cs = ConfigStore.instance()

@@ -141,7 +141,7 @@ class CM3PAudioKwargs(AudioKwargs, total=False):
 
 
 # noinspection PyTypedDict
-class CM3PProcessorKwargs(CM3PTokenizerKwargs, ImagesKwargs, AudioKwargs, CommonKwargs, total=False):
+class CM3PProcessorKwargs(CommonKwargs, CM3PBeatmapKwargs, CM3PTokenizerKwargs, CM3PAudioKwargs, total=False):
     _defaults = {
         "beatmap_kwargs": {
             "max_length": 8000,
@@ -179,8 +179,8 @@ class CM3PProcessorKwargs(CM3PTokenizerKwargs, ImagesKwargs, AudioKwargs, Common
     metadata_kwargs: CM3PTokenizerKwargs = {
         **CM3PTokenizerKwargs.__annotations__,
     }
-    audio_kwargs: AudioKwargs = {
-        **AudioKwargs.__annotations__,
+    audio_kwargs: CM3PAudioKwargs = {
+        **CM3PAudioKwargs.__annotations__,
     }
 
 

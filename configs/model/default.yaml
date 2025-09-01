@@ -1,27 +1,114 @@
-input_features: false
-project_encoder_input: true
-embed_decoder_input: true
-manual_norm_weights: false
 
-# Information to be fed to the model directly
-do_style_embed: true
-do_difficulty_embed: false
-do_mapper_embed: false
-do_song_position_embed: false
-cond_dim: 128
-cond_size: 0
+projection_dim: 512
+logit_scale_init_value: 2.6592
+initializer_factor: 1.0
+initializer_range: 0.02
 
-rope_type: "dynamic"
-rope_encoder_scaling_factor: 1.0
-rope_decoder_scaling_factor: 1.0
-
-spectrogram:
-  implementation: 'nnAudio'
-  log_scale: false
-  sampling_rate: 16000
-  hop_length: 128
-  n_fft: 1024
-  n_mels: 388
-  f_min: 0
-  f_max: 8000
-  pad_mode: 'constant'
+metadata_config:
+  projection_dim: 512
+  initializer_factor: 1.0
+  
+  vocab_size: 1000
+  hidden_size: 256
+  intermediate_size: 512
+  num_hidden_layers: 6
+  num_attention_heads: 4
+  hidden_activation: "gelu"
+  max_position_embeddings: 128
+  initializer_range: 0.02
+  initializer_cutoff_factor: 2.0
+  norm_eps: 1e-5
+  norm_bias: false
+  pad_token_id: 0
+  bos_token_id: 1
+  eos_token_id: 2
+  global_rope_theta: 10000.0
+  attention_bias: false
+  attention_dropout: 0.0
+  global_attn_every_n_layers: 1
+  local_attention: 128
+  local_rope_theta: 10000.0
+  embedding_dropout: 0.0
+  mlp_bias: false
+  mlp_dropout: 0.0
+  decoder_bias: true
+  deterministic_flash_attn: false
+  reference_compile: null
+  attn_implementation: "flash_attention_2"
+  
+beatmap_config:
+  audio_config:
+    hidden_size: 512
+    intermediate_size: 1024
+    num_hidden_layers: 6
+    num_attention_heads: 8
+    hidden_activation: "gelu"
+    max_position_embeddings: 4096
+    initializer_range: 0.02
+    initializer_cutoff_factor: 2.0
+    norm_eps: 1e-5
+    norm_bias: false
+    global_rope_theta: 160000.0
+    attention_bias: false
+    attention_dropout: 0.0
+    global_attn_every_n_layers: 3
+    local_attention: 128
+    local_rope_theta: 10000.0
+    embedding_dropout: 0.0
+    mlp_bias: false
+    mlp_dropout: 0.0
+    decoder_bias: true
+    deterministic_flash_attn: false
+    reference_compile: null
+    
+    projector_intermediate_size: 2048  # 4 * hidden_size for a 4x reduction in tokens
+    projector_dim: 768
+    projector_hidden_act: "gelu"
+    
+    sample_rate: 16000
+    n_ftt: 2048
+    n_mels: 80
+    hop_length: 128
+    f_min: 0
+    f_max: 8000
+    pad_mode: "constant"
+    attn_implementation: "flash_attention_2"
+    
+  audio_sos_token_id: 3164
+  audio_eos_token_id: 3165
+  audio_token_id: 3166
+  
+  projection_dim: 512
+  initializer_factor: 1.0
+  
+  vocab_size: 3167
+  hidden_size: 768
+  intermediate_size: 1152
+  num_hidden_layers: 22
+  num_attention_heads: 12
+  hidden_activation: "gelu"
+  max_position_embeddings: 8192
+  initializer_range: 0.02
+  initializer_cutoff_factor: 2.0
+  norm_eps: 1e-5
+  norm_bias: false
+  pad_token_id: 0
+  bos_token_id: 1
+  eos_token_id: 2
+  global_rope_theta: 160000.0
+  attention_bias: false
+  attention_dropout: 0.0
+  global_attn_every_n_layers: 3
+  local_attention: 128
+  local_rope_theta: 10000.0
+  embedding_dropout: 0.0
+  mlp_bias: false
+  mlp_dropout: 0.0
+  decoder_bias: true
+  deterministic_flash_attn: false
+  sparse_prediction: false
+  sparse_pred_ignore_index: -100
+  reference_compile: null
+  repad_logits_with_grad: false
+  attn_implementation: "flash_attention_2"
+  

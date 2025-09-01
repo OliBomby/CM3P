@@ -248,8 +248,8 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
 
             encoding = self._batch_prepare_for_model(
                 all_token_ids,
-                padding_strategy=padding,
-                truncation_strategy=truncation,
+                padding_strategy=PaddingStrategy(padding),
+                truncation_strategy=TruncationStrategy(truncation),
                 **kwargs,
             )
         else:
@@ -334,9 +334,9 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
     def __init__(
             self,
             vocab_file: Optional[str] = None,
-            modes: dict[int, str] = None,
-            mappers: dict[int, str] = None,
-            tags: dict[int, dict] = None,
+            modes: Optional[dict[int, str]] = None,
+            mappers: Optional[dict[int, str]] = None,
+            tags: Optional[dict[int, dict]] = None,
             min_difficculty: float = 0.0,
             max_difficulty: float = 14.0,
             difficulty_step: float = 0.1,
@@ -350,9 +350,6 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             scroll_speed_ratio_step: float = 0.1,
             **kwargs,
     ):
-        self.modes = modes or {}
-        self.mappers = mappers or {}
-        self.tags = tags or {}
         self.min_difficulty = min_difficculty
         self.max_difficulty = max_difficulty
         self.difficulty_step = difficulty_step
@@ -378,6 +375,16 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         self.hold_note_ratio_unk_token = "[HOLD_NOTE_RATIO_UNK]"
         self.scroll_speed_ratio_unk_token = "[SCROLL_SPEED_RATIO_UNK]"
         self.tag_unk_token = "[TAG_UNK]"
+
+        self.modes = modes or {}
+        self.mappers = mappers or {}
+        self.tags = tags or {}
+        self.mode_names_to_ids = {v: k for k, v in self.modes.items()}
+        self.mode_ids_to_names = self.modes
+        self.mapper_names_to_ids = {v: k for k, v in self.mappers.items()}
+        self.mapper_ids_to_names = self.mappers
+        self.tag_names_to_ids = {v['name']: k for k, v in self.tags.items()}
+        self.tag_ids_to_names = {k: v['name'] for k, v in self.tags.items()}
 
         if vocab_file is None:
             self.vocab = self._build_vocab_from_config()
@@ -432,11 +439,11 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         for year in range(self.min_year, self.max_year + 1):
             vocab.append(f"[YEAR_{year}]")
 
-        for mode in self.modes.values():
-            vocab.append(f"[MODE_{mode}]")
+        for mode in self.mode_ids_to_names.keys():
+            vocab.append(f"[MODE_{str(mode)}]")
 
-        for mapper in self.mappers.values():
-            vocab.append(f"[MAPPER_{mapper}]")
+        for mapper in self.mapper_ids_to_names.keys():
+            vocab.append(f"[MAPPER_{str(mapper)}]")
 
         for cs in np.arange(0.0, 10.0 + 1e-5, 0.1):
             vocab.append(f"[CS_{cs:.1f}]")
@@ -462,8 +469,8 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         for scroll_speed_ratio in np.arange(0.0, 1.0 + 1e-5, self.scroll_speed_ratio_step):
             vocab.append(f"[SCROLL_SPEED_RATIO_{scroll_speed_ratio:.1f}]")
 
-        for tag in self.tags.values():
-            vocab.append(f"[TAG_{tag['name']}]")
+        for tag in self.tag_ids_to_names.values():
+            vocab.append(f"[TAG_{tag}]")
 
         return {token: idx for idx, token in enumerate(vocab)}
 
@@ -483,20 +490,20 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         return f"[YEAR_{year}]"
 
     def _tokenize_mode(self, metadata: CM3PMetadata):
-        mode = metadata.get('mode', None)
-        if isinstance(mode, int):
-            mode = self.modes.get(mode, None)
-        if mode is None:
+        mode_id = metadata.get('mode', None)
+        if isinstance(mode_id, str):
+            mode_id = self.mode_names_to_ids.get(mode_id, None)
+        if mode_id is None or mode_id not in self.mode_ids_to_names:
             return self.mode_unk_token
-        return f"[MODE_{mode}]"
+        return f"[MODE_{str(mode_id)}]"
 
     def _tokenize_mapper(self, metadata: CM3PMetadata):
-        mapper = metadata.get('mapper', None)
-        if isinstance(mapper, int):
-            mapper = self.mappers.get(mapper, None)
-        if mapper is None:
+        mapper_id = metadata.get('mapper', None)
+        if isinstance(mapper_id, str):
+            mapper_id = self.mapper_names_to_ids.get(mapper_id, None)
+        if mapper_id is None or mapper_id not in self.mapper_ids_to_names:
             return self.mapper_unk_token
-        return f"[MAPPER_{mapper}]"
+        return f"[MAPPER_{str(mapper_id)}]"
 
     def _tokenize_cs(self, metadata: CM3PMetadata):
         cs = metadata.get('cs', None)
@@ -566,11 +573,10 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             return [self.tag_unk_token]
         new_tags = []
         for tag in tags:
-            if isinstance(tag, str):
+            if isinstance(tag, str) and tag in self.tag_names_to_ids:
                 new_tags.append(tag)
-            else:
-                if tag in self.tags:
-                    new_tags.append(self.tags[tag]['name'])
+            elif tag in self.tag_ids_to_names:
+                new_tags.append(self.tag_ids_to_names[tag])
         if not new_tags:
             return [self.tag_unk_token]
         return [f"[TAG_{tag}]" for tag in new_tags]
@@ -624,8 +630,8 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 
             return self._batch_prepare_for_model(
                 all_token_ids,
-                padding_strategy=padding,
-                truncation_strategy=truncation,
+                padding_strategy=PaddingStrategy(padding),
+                truncation_strategy=TruncationStrategy(truncation),
                 max_length=max_length,
                 return_tensors=return_tensors,
             )

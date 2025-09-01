@@ -10,14 +10,14 @@ from torch.utils.data import IterableDataset
 from transformers.utils import PaddingStrategy
 
 from cm3p.processing_cm3p import CM3PProcessor, get_metadata
-from config import DataConfig
+from config import DataSetConfig
 from data_utils import load_mmrs_metadata, filter_mmrs_metadata, load_audio_file
 
 
 class MmrsDataset(IterableDataset):
     def __init__(
             self,
-            args: DataConfig,
+            args: DataSetConfig,
             processor: CM3PProcessor,
             subset_ids: Optional[list[int]] = None,
             test: bool = False,
@@ -121,7 +121,7 @@ class BeatmapDatasetIterable:
     def __init__(
             self,
             metadata: DataFrame,
-            args: DataConfig,
+            args: DataSetConfig,
             processor: CM3PProcessor,
             test: bool,
     ):

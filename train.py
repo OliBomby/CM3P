@@ -1,45 +1,46 @@
+import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 import hydra
-import transformers
+from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
-from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers import Trainer
+from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers.trainer_utils import get_last_checkpoint, set_seed
 
-from cm3p import CM3PConfig, CM3PModel
+from cm3p import CM3PModel, CM3PConfig
 from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
 from config import TrainConfig
+from data_utils import filter_mmrs_metadata, load_mmrs_metadata
 from mmrs_dataset import MmrsDataset
 
 logger = logging.getLogger(__name__)
 
 
+# noinspection PyArgumentList
 @hydra.main(config_path="configs/train", config_name="v1", version_base="1.1")
 def main(args: TrainConfig):
-    # 1. Parse input arguments
+    # Parse input arguments
+    args = OmegaConf.to_object(args)
     training_args = TrainingArguments(**args.training)
 
-    # 2. Setup logging
+    # Set seed for all RNGs
+    set_seed(training_args.seed)
+
+    # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
 
-    if training_args.should_log:
-        # The default of training_args.log_level is passive, so we set log level at info here to have that default.
-        transformers.utils.logging.set_verbosity_info()
-
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
-    transformers.utils.logging.set_verbosity(log_level)
-    transformers.utils.logging.enable_default_handler()
-    transformers.utils.logging.enable_explicit_format()
 
     # Log on each process the small summary:
     logger.warning(
@@ -48,7 +49,7 @@ def main(args: TrainConfig):
     )
     # logger.info(f"Training/evaluation parameters {training_args}")
 
-    # 3. Detecting last checkpoint and eventually continue from last checkpoint
+    # Detecting last checkpoint and eventually continue from last checkpoint
     last_checkpoint = None
     if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
@@ -63,47 +64,71 @@ def main(args: TrainConfig):
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
-    # 5. Load pretrained model, tokenizer, and image processor
-    test_beatmap_tokenizer_config = {}
-
-    test_metadata_tokenizer_config = {
-        "modes": ["osu", "taiko", "fruits", "mania"],
-        "mappers": ["OliBomby", "Cookiezi", "peppy", "Xenon"],
-    }
+    # Load pretrained model, tokenizer, and image processor
+    # Populate metadata tokenizer modes, mappers, and tags configs from dataset if not provided
+    if args.processor.metadata_tokenizer.modes is None or args.processor.metadata_tokenizer.mappers is None or args.processor.metadata_tokenizer.tags is None:
+        train_metadata = filter_mmrs_metadata(
+            load_mmrs_metadata(args.dataset.train_dataset_paths),
+            start=args.dataset.train_dataset_start,
+            end=args.dataset.train_dataset_end,
+            gamemodes=args.dataset.gamemodes,
+            min_year=args.dataset.min_year,
+            max_year=args.dataset.max_year,
+            min_difficulty=args.dataset.min_difficulty,
+            max_difficulty=args.dataset.max_difficulty,
+        )
+        if args.processor.metadata_tokenizer.modes is None:
+            args.processor.metadata_tokenizer.modes = train_metadata.reset_index().set_index(["ModeInt"])["Mode"].to_dict()
+        if args.processor.metadata_tokenizer.mappers is None:
+            args.processor.metadata_tokenizer.mappers = train_metadata.reset_index().set_index(["UserId"])["Creator"].to_dict()
+        if args.processor.metadata_tokenizer.tags is None:
+            all_tag_ids = train_metadata["TopTagIds"].explode().dropna().unique().tolist()
+            tags_info = json.load(open(Path(__file__).parent / "resources" / "tags.json", "r", encoding="utf-8"))["tags"]
+            tags_info = {int(tag["id"]): {"name": tag["name"], "ruleset_id": tag["ruleset_id"], "description": tag["description"]} for tag in tags_info}
+            args.processor.metadata_tokenizer.tags = {tag_id: tags_info[tag_id] for tag_id in tags_info if tag_id in all_tag_ids}
 
     processor = CM3PProcessor(
-        WhisperFeatureExtractor(),
-        CM3PBeatmapParser(),
-        CM3PBeatmapTokenizer(vocab_init=test_beatmap_tokenizer_config),
-        CM3PMetadataTokenizer(vocab_init=test_metadata_tokenizer_config),
+        audio_feature_extractor=WhisperFeatureExtractor(**args.processor.audio_feature_extractor.__dict__),
+        beatmap_parser=CM3PBeatmapParser(**args.processor.beatmap_parser.__dict__),
+        beatmap_tokenizer=CM3PBeatmapTokenizer(**args.processor.beatmap_tokenizer.__dict__),
+        metadata_tokenizer=CM3PMetadataTokenizer(**args.processor.metadata_tokenizer.__dict__),
+        default_kwargs=args.processor.default_kwargs,
     )
 
-    # 4. Load dataset
+    # Load dataset
     train_dataset = MmrsDataset(
-        args.data,
+        args.dataset,
         processor=processor,
         test=False,
     )
     eval_dataset = MmrsDataset(
-        args.data,
+        args.dataset,
         processor=processor,
         test=True,
     )
 
-    # Test some data loading
-    train_dataloader = DataLoader(train_dataset, batch_size=16, num_workers=0)
-    for batch in train_dataloader:
-        print(batch)
-        print(processor.metadata_tokenizer.batch_decode(batch['metadata_ids'].numpy()[:, :20]))
-        break
+    # Populate model config with tokenizer info
+    model_config = CM3PConfig(**args.model)
 
-    config = CM3PConfig(attn_implementation="flash_attention_2")
-    config.beatmap_config.vocab_size = processor.beatmap_tokenizer.vocab_size
-    config.beatmap_config.audio_token_id = processor.beatmap_tokenizer.convert_tokens_to_ids(processor.beatmap_tokenizer.audio_token)
-    config.beatmap_config.audio_sos_token_id = processor.beatmap_tokenizer.convert_tokens_to_ids(processor.beatmap_tokenizer.audio_eos_token)
-    config.beatmap_config.audio_eos_token_id = processor.beatmap_tokenizer.convert_tokens_to_ids(processor.beatmap_tokenizer.audio_eos_token)
-    config.metadata_config.vocab_size = processor.metadata_tokenizer.vocab_size
-    model = CM3PModel(config)
+    def assign_token_id(config, tokenizer, token_attr_name):
+        token = getattr(tokenizer, token_attr_name, None)
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        setattr(config, f"{token_attr_name}_id", token_id)
+
+    model_config.beatmap_config.vocab_size = processor.beatmap_tokenizer.vocab_size
+    assign_token_id(model_config.beatmap_config, processor.beatmap_tokenizer, "pad_token")
+    assign_token_id(model_config.beatmap_config, processor.beatmap_tokenizer, "bos_token")
+    assign_token_id(model_config.beatmap_config, processor.beatmap_tokenizer, "eos_token")
+    assign_token_id(model_config.beatmap_config, processor.beatmap_tokenizer, "audio_sos_token")
+    assign_token_id(model_config.beatmap_config, processor.beatmap_tokenizer, "audio_eos_token")
+    assign_token_id(model_config.beatmap_config, processor.beatmap_tokenizer, "audio_token")
+
+    model_config.metadata_config.vocab_size = processor.metadata_tokenizer.vocab_size
+    assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "pad_token")
+    assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "bos_token")
+    assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "eos_token")
+
+    model = CM3PModel(args.model)
 
     def _freeze_params(module):
         for param in module.parameters():
@@ -115,10 +140,7 @@ def main(args: TrainConfig):
     if args.freeze_metadata_model:
         _freeze_params(model.metadata_model)
 
-    # set seed for torch dataloaders
-    set_seed(training_args.seed)
-
-    # 8. Initialize our trainer
+    # Initialize our trainer
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -129,7 +151,7 @@ def main(args: TrainConfig):
         processing_class=processor,
     )
 
-    # 9. Training
+    # Training
     if training_args.do_train:
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
@@ -143,13 +165,13 @@ def main(args: TrainConfig):
         trainer.save_metrics("train", train_result.metrics)
         trainer.save_state()
 
-    # 10. Evaluation
+    # Evaluation
     if training_args.do_eval:
         metrics = trainer.evaluate()
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    # 11. Write Training Stats and push to hub.
+    # Write Training Stats and push to hub.
     kwargs = {"tasks": "contrastive-image-text-modeling"}
 
     if training_args.push_to_hub:

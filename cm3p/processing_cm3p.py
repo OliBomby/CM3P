@@ -492,7 +492,8 @@ class CM3PProcessor(ProcessorMixin):
 
                 # Loop through with sliding window
                 groups_search_index = 0
-                for start_sec in np.arange(0, song_length - window_length_sec, window_stride_sec):
+                min_window_length_sec = 1
+                for start_sec in np.arange(0, song_length - min_window_length_sec, window_stride_sec):
                     end_sec = start_sec + window_length_sec
 
                     if audio_array is not None:
@@ -531,19 +532,20 @@ class CM3PProcessor(ProcessorMixin):
                     if multiply_metadata:
                         add_metadata(start_sec / song_length)
 
-            metadata = new_metadata
+            if len(batch_groups) > 0:
+                metadata = new_metadata
 
-            beatmap_encoding = self.beatmap_tokenizer(
-                groups=batch_groups,
-                window_start_ms=batch_start_ms,
-                num_audio_tokens=batch_num_audio_tokens,
-                **beatmap_kwargs,
-            )
+                beatmap_encoding = self.beatmap_tokenizer(
+                    groups=batch_groups,
+                    window_start_ms=batch_start_ms,
+                    num_audio_tokens=batch_num_audio_tokens,
+                    **beatmap_kwargs,
+                )
 
-            if audio is not None:
-                data = dict(beatmap_encoding)
-                data["input_features"] = self._retrieve_input_features(batch_audio, **audio_kwargs)
-                beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)
+                if audio is not None:
+                    data = dict(beatmap_encoding)
+                    data["input_features"] = self._retrieve_input_features(batch_audio, **audio_kwargs)
+                    beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)
 
         if metadata is not None and not (isinstance(metadata, list) and any(m is None for m in metadata)):
             if not isinstance(metadata, list):

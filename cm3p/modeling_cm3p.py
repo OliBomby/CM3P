@@ -380,8 +380,9 @@ class CM3PBeatmapTransformer(nn.Module):
             )
 
             # replace text-audio token placeholders with audio embeddings
+            audio_embeds = audio_model_outputs.audio_embeds.to(dtype=inputs_embeds.dtype)
             audio_token_mask = input_ids == self.config.audio_token_id
-            inputs_embeds[audio_token_mask] = audio_model_outputs.audio_embeds
+            inputs_embeds[audio_token_mask] = audio_embeds
 
         encoder_outputs: BaseModelOutput = self.encoder(
             inputs_embeds=inputs_embeds,
@@ -625,7 +626,7 @@ class CM3PModel(CM3PPreTrainedModel):
         logits_per_beatmap = logits_per_metadata.t()
 
         loss = None
-        if return_loss:
+        if return_loss or self.training:
             loss = cm3p_loss(logits_per_metadata)
 
         return CM3POutput(

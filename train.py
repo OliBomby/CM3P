@@ -29,6 +29,13 @@ def main(args: TrainConfig):
     args = OmegaConf.to_object(args)
     training_args = TrainingArguments(**args.training)
 
+    if args.wandb_project is not None:
+        os.environ["WANDB_PROJECT"] = args.wandb_project
+    if args.wandb_entity is not None:
+        os.environ["WANDB_ENTITY"] = args.wandb_entity
+    if args.wandb_mode is not None:
+        os.environ["WANDB_MODE"] = args.wandb_mode
+
     # Set seed for all RNGs
     set_seed(training_args.seed)
 
@@ -128,7 +135,7 @@ def main(args: TrainConfig):
     assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "bos_token")
     assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "eos_token")
 
-    model = CM3PModel(args.model)
+    model = CM3PModel(model_config)
 
     def _freeze_params(module):
         for param in module.parameters():
@@ -172,7 +179,7 @@ def main(args: TrainConfig):
         trainer.save_metrics("eval", metrics)
 
     # Write Training Stats and push to hub.
-    kwargs = {"tasks": "contrastive-image-text-modeling"}
+    kwargs = {"tasks": "contrastive-beatmap-metadata-modeling"}
 
     if training_args.push_to_hub:
         trainer.push_to_hub(**kwargs)

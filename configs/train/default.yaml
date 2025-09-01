@@ -4,9 +4,11 @@ defaults:
 freeze_beatmap_model: false  # Whether to freeze the beatmap model during training
 freeze_metadata_model: false  # Whether to freeze the metadata model during training
 
+wandb_project: "CM3P"
+wandb_entity: "mappingtools"
+wandb_mode: "offline"  # Set to "online" to log to wandb server
+
 training:
-  output_dir: 'trainer_output'
-  report_to: 'wandb'
   use_cpu: false
   bf16: true
   do_train: true
@@ -15,8 +17,8 @@ training:
   resume_from_checkpoint: null
   seed: 42
   learning_rate: 2e-4
-  per_device_train_batch_size: 16
-  per_device_eval_batch_size: 16
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
   gradient_accumulation_steps: 1
   weight_decay: 0.0
   eval_strategy: 'steps'
@@ -33,6 +35,7 @@ training:
   push_to_hub: false
   dataloader_drop_last: true
   dataloader_num_workers: 4
+  torch_empty_cache_steps: 8
 
 processor:
   audio_feature_extractor:

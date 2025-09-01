@@ -74,18 +74,18 @@ class ProcessorConfig:
 @dataclass
 class DataSetConfig:
     train_dataset_paths: list[str]
-    train_dataset_start: int
-    train_dataset_end: int
+    train_dataset_start: Optional[int]
+    train_dataset_end: Optional[int]
     test_dataset_paths: list[str]
-    test_dataset_start: int
-    test_dataset_end: int
+    test_dataset_start: Optional[int]
+    test_dataset_end: Optional[int]
     cycle_length: int
     drop_last: bool
-    gamemodes: list[int]
+    gamemodes: Optional[list[int]]
     min_year: Optional[int]
     max_year: Optional[int]
-    min_difficulty: float
-    max_difficulty: float
+    min_difficulty: Optional[float]
+    max_difficulty: Optional[float]
     metadata_dropout_prob: float
     dt_augment_prob: float
     dt_augment_range: list[float]
@@ -102,6 +102,10 @@ class TrainConfig:
     processor: ProcessorConfig
     dataset: DataSetConfig
     model: dict
+
+    wandb_project: Optional[str] = None
+    wandb_entity: Optional[str] = None
+    wandb_mode: Optional[str] = None
 
 
 cs = ConfigStore.instance()

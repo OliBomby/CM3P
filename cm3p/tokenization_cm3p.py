@@ -212,6 +212,9 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             truncation: TruncationStrategy = TruncationStrategy.LONGEST_FIRST,
             **kwargs
     ) -> BatchEncoding:
+        if len(groups) == 0:
+            raise ValueError("Input groups list is empty.")
+
         if isinstance(groups, list) and all(isinstance(g, Group) for g in groups):
             token_ids = self._encode_single(
                 groups=groups,

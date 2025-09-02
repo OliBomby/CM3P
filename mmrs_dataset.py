@@ -93,7 +93,7 @@ class InterleavingBeatmapDatasetIterable:
     ):
         self.workers = [
             iterable_factory(df).__iter__()
-            for df in np.array_split(metadata, cycle_length)
+            for df in np.array_split(metadata, cycle_length)  # Causes swapaxes future warning
         ]
         self.cycle_length = cycle_length
         self.index = 0

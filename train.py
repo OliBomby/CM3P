@@ -6,7 +6,6 @@ from pathlib import Path
 
 import hydra
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
 from transformers import Trainer
 from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers.trainer_utils import get_last_checkpoint, set_seed

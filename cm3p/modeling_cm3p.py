@@ -28,7 +28,7 @@ def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
     return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
 
 
-# CM3P loss function, adapted from CM3P
+# CM3P loss function, adapted from CLIP
 def cm3p_loss(similarity: torch.Tensor) -> torch.Tensor:
     metadata_loss = contrastive_loss(similarity)
     beatmap_loss = contrastive_loss(similarity.t())

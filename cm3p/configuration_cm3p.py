@@ -286,11 +286,11 @@ class CM3PConfig(PretrainedConfig):
 
         if metadata_config is None:
             metadata_config = {}
-            logger.info("`text_config` is `None`. Initializing the `CM3PMetadataConfig` with default values.")
+            logger.info("`metadata_config` is `None`. Initializing the `CM3PMetadataConfig` with default values.")
 
         if beatmap_config is None:
             beatmap_config = {}
-            logger.info("`vision_config` is `None`. initializing the `CM3PBeatmapConfig` with default values.")
+            logger.info("`beatmap_config` is `None`. initializing the `CM3PBeatmapConfig` with default values.")
 
         self.metadata_config = CM3PMetadataConfig(**metadata_config)
         self.beatmap_config = CM3PBeatmapConfig(**beatmap_config)

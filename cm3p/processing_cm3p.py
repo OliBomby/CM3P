@@ -502,7 +502,7 @@ class CM3PProcessor(ProcessorMixin):
                         end_frame = int(end_sec * sampling_rate)
                         audio_slice = audio_array[start_frame:end_frame]
                         # Pad the audio array and calculate the number of audio tokens
-                        audio_slice, num_audio_tokens = self._encode_audio(audio_slice, **kwargs)
+                        audio_slice, num_audio_tokens = self._encode_audio(audio_slice, **audio_kwargs)
                     else:
                         audio_slice = None
                         num_audio_tokens = 0

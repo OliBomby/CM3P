@@ -579,7 +579,7 @@ class CM3PModel(CM3PPreTrainedModel):
         metadata_attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        return_loss: Optional[bool] = None,
+        return_loss: Optional[bool] = True,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
     ) -> CM3POutput:
@@ -634,7 +634,7 @@ class CM3PModel(CM3PPreTrainedModel):
         logits_per_beatmap = logits_per_metadata.t()
 
         loss = None
-        if return_loss or self.training:
+        if return_loss:
             loss = cm3p_loss(logits_per_metadata)
 
         return CM3POutput(

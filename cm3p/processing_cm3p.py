@@ -566,6 +566,7 @@ class CM3PProcessor(ProcessorMixin):
 
         if metadata_encoding is not None and beatmap_encoding is not None:
             beatmap_encoding["metadata_ids"] = metadata_encoding["input_ids"]
+            beatmap_encoding["metadata_attention_mask"] = metadata_encoding["attention_mask"]
             return beatmap_encoding
         elif beatmap_encoding is not None:
             return beatmap_encoding

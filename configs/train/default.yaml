@@ -18,9 +18,9 @@ training:
   resume_from_checkpoint: null
   seed: 42
   learning_rate: 2e-4
-  per_device_train_batch_size: 4
-  per_device_eval_batch_size: 4
-  gradient_accumulation_steps: 1
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 8
   weight_decay: 0.0
   eval_strategy: 'steps'
   eval_steps: 500
@@ -36,7 +36,7 @@ training:
   push_to_hub: false
   dataloader_drop_last: true
   dataloader_num_workers: 4
-  torch_empty_cache_steps: 8
+  torch_empty_cache_steps: 1
 
 processor:
   audio_feature_extractor:
@@ -65,7 +65,7 @@ processor:
 
   beatmap_tokenizer:
     min_time: 0
-    max_time: 30000
+    max_time: 16000
     time_step: 10
     max_distance: 640
     distance_step: 4
@@ -88,11 +88,11 @@ processor:
 
   default_kwargs:
       beatmap_kwargs:
-        max_length: 8000
+        max_length: 4000
         padding: 'longest'
         truncation: 'longest_first'
-        window_length_sec: 30.0
-        window_stride_sec: 30.0
+        window_length_sec: 16.0
+        window_stride_sec: 16.0
 
       metadata_kwargs:
         max_length: 128
@@ -103,11 +103,11 @@ processor:
         sampling_rate: ${...audio_feature_extractor.sampling_rate}
         padding: true
         truncation: false
-        pad_to_multiple_of: 480000
-        max_source_positions: 3000
+        pad_to_multiple_of: 256000
+        max_source_positions: 1600
+        audio_length_per_tok: 8
         hop_length: ${...audio_feature_extractor.hop_length}
         window_size: ${...audio_feature_extractor.n_fft}
-        audio_length_per_tok: 8
 
       common_kwargs:
         return_tensors: "pt"
@@ -119,7 +119,7 @@ dataset:                  # Data settings
   test_dataset_paths: [ "/workspace/datasets/MMRS39389", "/workspace/datasets/MMUS40000" ]  # Testing/validation dataset directory
   test_dataset_start: 78689  # Testing/validation dataset start index
   test_dataset_end: 79389  # Testing/validation dataset end index
-  cycle_length: 16  # Number of files to cycle through when loading data to increase batch variety
+  cycle_length: 8  # Number of files to cycle through when loading data to increase batch variety
   drop_last: true  # Drop last incomplete batch
   gamemodes: [ 0, 1, 2, 3 ]  # List of gamemodes to include in the dataset
   min_year: 2000  # Minimum year of the beatmap to include in the dataset

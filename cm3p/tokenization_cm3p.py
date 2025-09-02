@@ -331,7 +331,7 @@ def merge_metadata_dicts(m1, m2):
 
 
 class CM3PMetadataTokenizer(PreTrainedTokenizer):
-    model_input_names: list[str] = ["input_ids"]
+    model_input_names: list[str] = ["input_ids", "attention_mask"]
     vocab_files_names: dict[str, str] = {"vocab_file": "vocab.json"}
 
     def __init__(

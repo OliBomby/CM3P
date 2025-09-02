@@ -216,6 +216,7 @@ class CM3PMetadataTransformer(nn.Module):
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
     ) -> BaseModelOutputWithPooling:
@@ -229,6 +230,7 @@ class CM3PMetadataTransformer(nn.Module):
 
         encoder_outputs: BaseModelOutput = self.encoder(
             input_ids=input_ids,
+            attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -269,11 +271,13 @@ class CM3PMetadataModel(CM3PPreTrainedModel):
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
     ) -> BaseModelOutputWithPooling:
         return self.metadata_model(
             input_ids=input_ids,
+            attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -572,6 +576,7 @@ class CM3PModel(CM3PPreTrainedModel):
         input_features: Optional[torch.FloatTensor] = None,
         metadata_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        metadata_attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         return_loss: Optional[bool] = None,
@@ -584,6 +589,8 @@ class CM3PModel(CM3PPreTrainedModel):
             compute the beatmap embeddings.
         metadata_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
             The input IDs for the metadata model. The model will use these IDs to compute the metadata embeddings.
+        metadata_attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+            The attention mask for the metadata model. If provided, the model will not attend to the padded tokens.
         return_loss (`bool`, *optional*):
             Whether to return the contrastive loss.
         """
@@ -605,6 +612,7 @@ class CM3PModel(CM3PPreTrainedModel):
 
         metadata_outputs: BaseModelOutputWithPooling = self.metadata_model(
             input_ids=metadata_ids,
+            attention_mask=metadata_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -666,6 +674,7 @@ class CM3PMetadataModelWithProjection(CM3PPreTrainedModel):
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
     ) -> CM3PMetadataModelOutput:
@@ -678,6 +687,7 @@ class CM3PMetadataModelWithProjection(CM3PPreTrainedModel):
         """
         metadata_outputs: BaseModelOutputWithPooling = self.metadata_model(
             input_ids=input_ids,
+            attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )

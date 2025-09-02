@@ -171,18 +171,23 @@ class BeatmapDatasetIterable:
             print(e)
             return
 
-        results = self.processor(
-            metadata=get_metadata(beatmap_metadata=beatmap_metadata, speed=speed),
-            beatmap=beatmap_path,
-            audio=audio_samples,
-            audio_sampling_rate=self.args.sampling_rate,
-            speed=speed,
-            multiply_metadata=True,
-            populate_metadata=True,
-            metadata_dropout_prob=self.args.metadata_dropout_prob,
-            padding=PaddingStrategy.MAX_LENGTH,
-            return_tensors="pt",
-        )
+        try:
+            results = self.processor(
+                metadata=get_metadata(beatmap_metadata=beatmap_metadata, speed=speed),
+                beatmap=beatmap_path,
+                audio=audio_samples,
+                audio_sampling_rate=self.args.sampling_rate,
+                speed=speed,
+                multiply_metadata=True,
+                populate_metadata=True,
+                metadata_dropout_prob=self.args.metadata_dropout_prob,
+                padding=PaddingStrategy.MAX_LENGTH,
+                return_tensors="pt",
+            )
+        except Exception as e:
+            print(f"Failed to process beatmap: {beatmap_path}")
+            print(e)
+            return
 
         # Split the batch feature and yield each individual sample, so we can interleave and create varied batches
         batch_size = len(results["input_ids"])

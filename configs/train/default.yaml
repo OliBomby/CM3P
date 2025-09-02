@@ -7,7 +7,7 @@ attn_implementation: "flash_attention_2"
 
 wandb_project: "CM3P"
 wandb_entity: "mappingtools"
-wandb_mode: "offline"  # Set to "online" to log to wandb server
+wandb_mode: "online"  # Set to "online" to log to wandb server
 
 training:
   use_cpu: false
@@ -23,8 +23,8 @@ training:
   gradient_accumulation_steps: 8
   weight_decay: 0.0
   eval_strategy: 'steps'
-  eval_steps: 500
-  max_steps: 60000
+  eval_steps: 1000
+  max_steps: 30000
   logging_strategy: 'steps'
   logging_steps: 10
   save_strategy: 'steps'

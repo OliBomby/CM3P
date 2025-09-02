@@ -305,6 +305,7 @@ class CM3PMetadata(TypedDict, total=False):
     difficulty: float  # Star rating, unitless (osu! difficulty)
     year: int  # Year of beatmap creation (YYYY)
     mode: Union[int, str]  # Game mode ID or name (e.g., "osu", "mania")
+    status: Union[int, str]  # Beatmap status (e.g., "ranked", "approved", "loved", "pending", "graveyard")
     mapper: Union[int, str]  # Beatmap creator's ID or username
     cs: float  # Circle size (osu!std), unitless
     hitsounded: bool  # Whether the beatmap is hitsounded (True/False)
@@ -338,6 +339,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             self,
             vocab_file: Optional[str] = None,
             modes: Optional[dict[int, str]] = None,
+            statuses: Optional[dict[int, str]] = None,
             mappers: Optional[dict[int, str]] = None,
             tags: Optional[dict[int, dict]] = None,
             min_difficculty: float = 0.0,
@@ -368,6 +370,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         self.difficulty_unk_token = "[DIFFICULTY_UNK]"
         self.year_unk_token = "[YEAR_UNK]"
         self.mode_unk_token = "[MODE_UNK]"
+        self.status_unk_token = "[STATUS_UNK]"
         self.mapper_unk_token = "[MAPPER_UNK]"
         self.cs_unk_token = "[CS_UNK]"
         self.hitsounded_unk_token = "[HITSOUNDED_UNK]"
@@ -380,10 +383,13 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         self.tag_unk_token = "[TAG_UNK]"
 
         self.modes = modes or {}
+        self.statuses = statuses or {}
         self.mappers = mappers or {}
         self.tags = tags or {}
         self.mode_names_to_ids = {v: k for k, v in self.modes.items()}
         self.mode_ids_to_names = self.modes
+        self.status_names_to_ids = {v: k for k, v in self.statuses.items()}
+        self.status_ids_to_names = self.statuses
         self.mapper_names_to_ids = {v: k for k, v in self.mappers.items()}
         self.mapper_ids_to_names = self.mappers
         self.tag_names_to_ids = {v['name']: k for k, v in self.tags.items()}
@@ -405,6 +411,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
                 self.difficulty_unk_token,
                 self.year_unk_token,
                 self.mode_unk_token,
+                self.status_unk_token,
                 self.mapper_unk_token,
                 self.cs_unk_token,
                 self.hitsounded_unk_token,
@@ -417,6 +424,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
                 self.tag_unk_token,
             ]),
             modes=modes,
+            statuses=statuses,
             mappers=mappers,
             tags=tags,
             min_difficculty=min_difficculty,
@@ -442,8 +450,11 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         for year in range(self.min_year, self.max_year + 1):
             vocab.append(f"[YEAR_{year}]")
 
-        for mode in self.mode_ids_to_names.keys():
+        for mode in self.mode_ids_to_names.values():
             vocab.append(f"[MODE_{str(mode)}]")
+
+        for status in self.status_ids_to_names.values():
+            vocab.append(f"[STATUS_{str(status)}]")
 
         for mapper in self.mapper_ids_to_names.keys():
             vocab.append(f"[MAPPER_{str(mapper)}]")
@@ -493,12 +504,20 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         return f"[YEAR_{year}]"
 
     def _tokenize_mode(self, metadata: CM3PMetadata):
-        mode_id = metadata.get('mode', None)
-        if isinstance(mode_id, str):
-            mode_id = self.mode_names_to_ids.get(mode_id, None)
-        if mode_id is None or mode_id not in self.mode_ids_to_names:
+        mode_str = metadata.get('mode', None)
+        if isinstance(mode_str, int):
+            mode_str = self.mode_ids_to_names.get(mode_str, None)
+        if mode_str is None or mode_str not in self.mode_names_to_ids:
             return self.mode_unk_token
-        return f"[MODE_{str(mode_id)}]"
+        return f"[MODE_{str(mode_str)}]"
+
+    def _tokenize_status(self, metadata: CM3PMetadata):
+        status_str = metadata.get('status', None)
+        if isinstance(status_str, int):
+            status_str = self.status_ids_to_names.get(status_str, None)
+        if status_str is None or status_str not in self.status_names_to_ids:
+            return self.status_unk_token
+        return f"[STATUS_{str(status_str)}]"
 
     def _tokenize_mapper(self, metadata: CM3PMetadata):
         mapper_id = metadata.get('mapper', None)
@@ -590,6 +609,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             self._tokenize_difficulty(metadata),
             self._tokenize_year(metadata),
             self._tokenize_mode(metadata),
+            self._tokenize_status(metadata),
             self._tokenize_mapper(metadata),
             self._tokenize_cs(metadata),
             self._tokenize_hitsounded(metadata),

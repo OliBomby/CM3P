@@ -72,7 +72,10 @@ def main(args: TrainConfig):
 
     # Load pretrained model, tokenizer, and image processor
     # Populate metadata tokenizer modes, mappers, and tags configs from dataset if not provided
-    if args.processor.metadata_tokenizer.modes is None or args.processor.metadata_tokenizer.mappers is None or args.processor.metadata_tokenizer.tags is None:
+    if (args.processor.metadata_tokenizer.modes is None
+            or args.processor.metadata_tokenizer.statuses is None
+            or args.processor.metadata_tokenizer.mappers is None
+            or args.processor.metadata_tokenizer.tags is None):
         train_metadata = filter_mmrs_metadata(
             load_mmrs_metadata(args.dataset.train_dataset_paths),
             start=args.dataset.train_dataset_start,
@@ -85,6 +88,8 @@ def main(args: TrainConfig):
         )
         if args.processor.metadata_tokenizer.modes is None:
             args.processor.metadata_tokenizer.modes = train_metadata.reset_index().set_index(["ModeInt"])["Mode"].to_dict()
+        if args.processor.metadata_tokenizer.statuses is None:
+            args.processor.metadata_tokenizer.statuses = train_metadata.reset_index().set_index(["Ranked"])["Status"].to_dict()
         if args.processor.metadata_tokenizer.mappers is None:
             args.processor.metadata_tokenizer.mappers = train_metadata.reset_index().set_index(["UserId"])["Creator"].to_dict()
         if args.processor.metadata_tokenizer.tags is None:

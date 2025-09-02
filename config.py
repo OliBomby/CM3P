@@ -58,6 +58,7 @@ class MetadataTokenizerConfig:
     hold_note_ratio_step: float
     scroll_speed_ratio_step: float
     modes: Optional[dict[int, str]] = None
+    statuses: Optional[dict[int, str]] = None
     mappers: Optional[dict[int, str]] = None
     tags: Optional[dict[int, dict]] = None
 

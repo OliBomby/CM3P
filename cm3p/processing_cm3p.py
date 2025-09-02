@@ -98,6 +98,7 @@ def get_metadata(
         difficulty=get_difficulty(beatmap_metadata, speed) if beatmap_metadata is not None else None,
         year=beatmap_metadata["SubmittedDate"].year if beatmap_metadata is not None else None,
         mode=mode,
+        status=beatmap_metadata["Status"] if beatmap_metadata is not None else None,
         mapper=beatmap_metadata["UserId"] if beatmap_metadata is not None else None,
         cs=circle_size if mode in [0, 2] is not None else None,
         hitsounded=get_hitsounded_status(beatmap) if beatmap is not None else None,

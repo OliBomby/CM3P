@@ -97,6 +97,7 @@ class DataSetConfig:
 class TrainConfig:
     freeze_beatmap_model: bool
     freeze_metadata_model: bool
+    attn_implementation: str
 
     training: dict
     processor: ProcessorConfig

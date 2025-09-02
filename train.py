@@ -115,6 +115,7 @@ def main(args: TrainConfig):
 
     # Populate model config with tokenizer info
     model_config = CM3PConfig(**args.model)
+    model_config._attn_implementation = args.attn_implementation
 
     def assign_token_id(config, tokenizer, token_attr_name):
         token = getattr(tokenizer, token_attr_name, None)

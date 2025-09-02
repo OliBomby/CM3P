@@ -34,7 +34,6 @@ metadata_config:
   decoder_bias: true
   deterministic_flash_attn: false
   reference_compile: null
-  attn_implementation: "flash_attention_2"
   
 beatmap_config:
   audio_config:
@@ -72,7 +71,6 @@ beatmap_config:
     f_min: 0
     f_max: 8000
     pad_mode: "constant"
-    attn_implementation: "flash_attention_2"
     
   audio_sos_token_id: 3164
   audio_eos_token_id: 3165
@@ -110,5 +108,4 @@ beatmap_config:
   sparse_pred_ignore_index: -100
   reference_compile: null
   repad_logits_with_grad: false
-  attn_implementation: "flash_attention_2"
   

@@ -472,8 +472,8 @@ class CM3PProcessor(ProcessorMixin):
             batch_audio = []
             batch_num_audio_tokens = []
             for b, m, audio_array in zip(beatmap, metadata, audio):
-                song_length = get_song_length(audio_array, sampling_rate, b)
                 b: Beatmap = load_beatmap(b)
+                song_length = get_song_length(audio_array, sampling_rate, b)
                 beatmap_groups = self.beatmap_parser.parse_beatmap(b, speed=speed, song_length=song_length)
 
                 def add_metadata(song_position: Optional[float] = None):

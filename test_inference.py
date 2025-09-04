@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from transformers import WhisperFeatureExtractor
 
@@ -10,33 +11,25 @@ from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = "cpu"
 
-test_beatmap_tokenizer_config = {
-    "event_types": [
-        "hitcircle",
-        "slider",
-        "spinner",
-    ],
+modes = {
+    0: "osu",
+    1: "taiko",
+    2: "fruits",
+    3: "mania",
 }
 
-test_metadata_tokenizer_config = {
-    "modes": [
-        "osu",
-        "taiko",
-        "fruits",
-        "mania",
-    ],
-    "mappers": [
-        "OliBomby",
-        "Cookiezi",
-        "peppy",
-        "Xenon",
-    ],
+mappers = {
+    0: "OliBomby",
+    1: "Cookiezi",
+    2: "peppy",
+    3: "Xenon",
 }
+
 processor = CM3PProcessor(
     WhisperFeatureExtractor(),
     CM3PBeatmapParser(),
-    CM3PBeatmapTokenizer(vocab_init=test_beatmap_tokenizer_config),
-    CM3PMetadataTokenizer(vocab_init=test_metadata_tokenizer_config),
+    CM3PBeatmapTokenizer(),
+    CM3PMetadataTokenizer(modes=modes, mappers=mappers),
 )
 
 config = CM3PConfig()
@@ -67,12 +60,13 @@ audio = r"resources/audio.mp3"
 beatmap = r"resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"
 labels = [
     CM3PMetadata(difficulty=1.5, mode="osu", mapper="OliBomby", year=2020),
-    CM3PMetadata(difficulty=3.0, mode="taiko", mapper="Cookiezi", year=2018),
-    CM3PMetadata(difficulty=5.0, mode="fruits", mapper="peppy", year=2021),
-    CM3PMetadata(difficulty=7.0, mode="mania", mapper="Xenon", year=2019),
+    # CM3PMetadata(difficulty=3.0, mode="taiko", mapper="Cookiezi", year=2018),
+    # CM3PMetadata(difficulty=5.0, mode="fruits", mapper="peppy", year=2021),
+    # CM3PMetadata(difficulty=7.0, mode="mania", mapper="Xenon", year=2019),
 ]
+audio = np.array([])
 
-inputs = processor(metadata=labels, beatmap=beatmap, audio=audio, return_tensors="pt")
+inputs = processor(metadata=labels, beatmap=beatmap, audio=audio, sampling_rate=16000, return_tensors="pt", multiply_metadata=True)
 inputs = inputs.to(device, dtype=torch.bfloat16)
 
 with torch.no_grad():

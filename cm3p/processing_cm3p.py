@@ -3,13 +3,14 @@ import itertools
 import math
 import os
 from os import PathLike
+from pathlib import Path
 from typing import Optional, Union, IO, TypedDict
 
 import numpy as np
 import soxr
 from pandas import Series
 from slider import Beatmap, HoldNote
-from transformers import WhisperFeatureExtractor, AutoProcessor
+from transformers import WhisperFeatureExtractor, AutoProcessor, BatchEncoding
 from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NAME, logging
 
@@ -22,7 +23,7 @@ if is_torch_available():
 
 from transformers.audio_utils import AudioInput, make_list_of_audio, load_audio
 from transformers.feature_extraction_utils import BatchFeature
-from transformers.processing_utils import AudioKwargs, ProcessorMixin, ImagesKwargs, CommonKwargs
+from transformers.processing_utils import AudioKwargs, ProcessorMixin, CommonKwargs
 
 logger = logging.get_logger(__name__)
 
@@ -299,7 +300,7 @@ class CM3PProcessor(ProcessorMixin):
     def _load_audio(
         self,
         sampling_rate: int,
-        audio: Union[str, list[str], AudioInput],
+        audio: Union[str, list[str], Path, list[Path], AudioInput],
         audio_sampling_rate: Optional[Union[int, list[int]]] = None,
         speed: float = 1.0,
     ) -> list[np.ndarray]:
@@ -307,9 +308,15 @@ class CM3PProcessor(ProcessorMixin):
         Helper method to load audio from various formats and return a list of audio buffers.
         """
 
+        # convert Path objects to str
+        if isinstance(audio, Path):
+            audio = str(audio)
+        if isinstance(audio, list) and all(isinstance(el, Path) for el in audio):
+            audio = [str(el) for el in audio]
+
         # validate audio input
         is_str = isinstance(audio, str)
-        is_list_of_str = all(isinstance(el, str) for el in audio)
+        is_list_of_str = isinstance(audio, list) and all(isinstance(el, str) for el in audio)
         is_list_of_audio = not (is_str or is_list_of_str)
 
         if is_list_of_audio:
@@ -408,7 +415,7 @@ class CM3PProcessor(ProcessorMixin):
         self,
         metadata: Optional[Union[CM3PMetadata, list[CM3PMetadata]]] = None,
         beatmap: Optional[Union[str, list[str], PathLike, list[PathLike], IO[str], list[IO[str]], Beatmap, list[Beatmap]]] = None,
-        audio: Optional[Union[str, list[str], AudioInput]] = None,
+        audio: Optional[Union[str, list[str], Path, list[Path], AudioInput]] = None,
         audio_sampling_rate: Optional[Union[int, list[int]]] = None,
         speed: float = 1.0,
         multiply_metadata: bool = False,
@@ -425,7 +432,10 @@ class CM3PProcessor(ProcessorMixin):
 
         window_length_sec = beatmap_kwargs.pop("window_length_sec")
         window_stride_sec = beatmap_kwargs.pop("window_stride_sec")
+        max_length = beatmap_kwargs.get("max_length", 8000)
+        metadata_max_length = metadata_kwargs.get("max_length", 128)
         sampling_rate = audio_kwargs["sampling_rate"]
+        max_source_positions = audio_kwargs.get("max_source_positions", 3000)
         return_tensors = common_kwargs["return_tensors"]
 
         metadata_encoding, beatmap_encoding, num_audio_tokens = None, None, None
@@ -533,9 +543,9 @@ class CM3PProcessor(ProcessorMixin):
                     if multiply_metadata:
                         add_metadata(start_sec / song_length)
 
-            if len(batch_groups) > 0:
-                metadata = new_metadata
+            metadata = new_metadata
 
+            if len(batch_groups) > 0:
                 beatmap_encoding = self.beatmap_tokenizer(
                     groups=batch_groups,
                     window_start_ms=batch_start_ms,
@@ -546,6 +556,20 @@ class CM3PProcessor(ProcessorMixin):
                 if audio is not None:
                     data = dict(beatmap_encoding)
                     data["input_features"] = self._retrieve_input_features(batch_audio, **audio_kwargs)
+                    beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)
+            else:
+                # No windows with hit objects were found, return empty encoding
+                logger.warning("Warning: No windows with hit objects were found in the provided beatmap(s). Returning empty encoding.")
+                beatmap_encoding = BatchEncoding(
+                    {
+                        "input_ids": torch.zeros((0, max_length), dtype=torch.long) if return_tensors == "pt" else [],
+                        "attention_mask": torch.zeros((0, max_length), dtype=torch.long) if return_tensors == "pt" else [],
+                    },
+                    tensor_type=return_tensors,
+                )
+                if audio is not None:
+                    data = dict(beatmap_encoding)
+                    data["input_features"] = torch.zeros((0, self.audio_feature_extractor.feature_size, max_source_positions), dtype=torch.float) if return_tensors == "pt" else []
                     beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)
 
         if metadata is not None and not (isinstance(metadata, list) and any(m is None for m in metadata)):
@@ -560,10 +584,19 @@ class CM3PProcessor(ProcessorMixin):
                             # noinspection PyTypedDict
                             m[key] = None
 
-            metadata_encoding = self.metadata_tokenizer(
-                metadata,
-                **metadata_kwargs,
-            )
+            if len(metadata) > 0:
+                metadata_encoding = self.metadata_tokenizer(
+                    metadata,
+                    **metadata_kwargs,
+                )
+            else:
+                metadata_encoding = BatchEncoding(
+                    {
+                        "input_ids": torch.zeros((0, metadata_max_length), dtype=torch.long) if return_tensors == "pt" else [],
+                        "attention_mask": torch.zeros((0, metadata_max_length), dtype=torch.long) if return_tensors == "pt" else [],
+                    },
+                    tensor_type=return_tensors,
+                )
 
         if metadata_encoding is not None and beatmap_encoding is not None:
             beatmap_encoding["metadata_ids"] = metadata_encoding["input_ids"]

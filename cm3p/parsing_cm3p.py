@@ -307,8 +307,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
                     self._add_group(
                         EventType.SCROLL_SPEED_CHANGE,
                         groups,
-                        beatmap,
                         time=tp.offset,
+                        beatmap=beatmap,
                         scroll_speed=normalized_scroll_speed,
                     )
                 last_normalized_scroll_speed = normalized_scroll_speed
@@ -330,8 +330,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
             self._add_group(
                 EventType.KIAI_ON if tp.kiai_mode else EventType.KIAI_OFF,
                 groups,
-                beatmap,
                 time=tp.offset,
+                beatmap=beatmap,
             )
             kiai = tp.kiai_mode
 
@@ -371,13 +371,16 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
                 self._add_group(
                     event_type,
                     groups,
-                    beatmap,
                     time=timedelta(milliseconds=time),
                     add_snap=False,
                 )
 
+                # Exit early if the beat_delta is too small to avoid infinite loops
+                if beat_delta <= 10:
+                    break
+
                 measure_counter += 1
-                time = int(start_time + measure_counter * beat_delta)
+                time = start_time + measure_counter * beat_delta
 
         if speed != 1.0:
             groups = speed_groups(groups, speed)
@@ -462,9 +465,9 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
             self,
             event_type: EventType,
             groups: list[Group],
-            beatmap: Beatmap,
             time: timedelta,
             *,
+            beatmap: Beatmap = None,
             add_snap: bool = True,
             has_time: bool = True,
             pos: npt.NDArray = None,
@@ -522,8 +525,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         return self._add_group(
             EventType.CIRCLE,
             groups,
-            beatmap,
             time=circle.time,
+            beatmap=beatmap,
             pos=np.array(circle.position),
             last_pos=last_pos,
             new_combo=circle.new_combo,
@@ -551,8 +554,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         last_pos = self._add_group(
             EventType.SLIDER_HEAD,
             groups,
-            beatmap,
             time=slider.time,
+            beatmap=beatmap,
             pos=np.array(slider.position),
             last_pos=last_pos,
             new_combo=slider.new_combo,
@@ -575,8 +578,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
             return self._add_group(
                 event_type,
                 groups,
-                beatmap,
                 time=slider.time + i / (control_point_count - 1) * duration if self.slider_version == 1 else slider.time,
+                beatmap=beatmap,
                 has_time=False,
                 pos=np.array(slider.curve.points[i]),
                 last_pos=last_pos,
@@ -600,8 +603,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
             last_pos = self._add_group(
                 EventType.LAST_ANCHOR,
                 groups,
-                beatmap,
                 time=slider.time,
+                beatmap=beatmap,
                 has_time=False,
                 pos=np.array(slider.curve.points[-1]),
                 last_pos=last_pos,
@@ -611,8 +614,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         last_pos = self._add_group(
             EventType.SLIDER_END,
             groups,
-            beatmap,
             time=slider.time + duration,
+            beatmap=beatmap,
             pos=np.array(slider.curve.points[-1]) if self.slider_version == 1 else None,
             last_pos=last_pos,
             hitsound_ref_times=[slider.time + timedelta(milliseconds=1)] + [slider.time + i * duration for i in range(1, slider.repeat)],
@@ -623,8 +626,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         return self._add_group(
             EventType.REPEAT_END,
             groups,
-            beatmap,
             time=slider.end_time,
+            beatmap=beatmap,
             pos=np.array(slider.curve(1)),
             last_pos=last_pos,
             hitsound_ref_times=[slider.end_time],
@@ -645,15 +648,15 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self._add_group(
             EventType.SPINNER,
             groups,
-            beatmap,
             time=spinner.time,
+            beatmap=beatmap,
         )
 
         self._add_group(
             EventType.SPINNER_END,
             groups,
-            beatmap,
             time=spinner.end_time,
+            beatmap=beatmap,
             hitsound_ref_times=[spinner.end_time],
             hitsounds=[spinner.hitsound],
             additions=[spinner.addition],
@@ -676,8 +679,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self._add_group(
             EventType.HOLD_NOTE,
             groups,
-            beatmap,
             time=hold_note.time,
+            beatmap=beatmap,
             pos=pos,
             hitsound_ref_times=[hold_note.time],
             hitsounds=[hold_note.hitsound],
@@ -687,8 +690,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self._add_group(
             EventType.HOLD_NOTE_END,
             groups,
-            beatmap,
             time=hold_note.end_time,
+            beatmap=beatmap,
             pos=pos,
         )
 
@@ -704,8 +707,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self._add_group(
             EventType.DRUMROLL,
             groups,
-            beatmap,
             time=slider.time,
+            beatmap=beatmap,
             hitsound_ref_times=[slider.time],
             hitsounds=[slider.hitsound],  # Edge hitsounds are not supported in drumrolls
             additions=[slider.addition],
@@ -715,8 +718,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self._add_group(
             EventType.DRUMROLL_END,
             groups,
-            beatmap,
             time=slider.end_time,
+            beatmap=beatmap,
         )
 
     def _parse_denden(self, spinner: Spinner, groups: list[Group], beatmap: Beatmap):
@@ -729,8 +732,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self._add_group(
             EventType.DENDEN,
             groups,
-            beatmap,
             time=spinner.time,
+            beatmap=beatmap,
             hitsound_ref_times=[spinner.time],
             hitsounds=[spinner.hitsound],
             additions=[spinner.addition],
@@ -740,8 +743,8 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self._add_group(
             EventType.DENDEN_END,
             groups,
-            beatmap,
             time=spinner.end_time,
+            beatmap=beatmap,
         )
 
 

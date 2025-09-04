@@ -1,17 +1,55 @@
 from __future__ import annotations
 
+import logging
+import os
 import random
 from pathlib import Path
 from typing import Optional, Callable
 
 import numpy as np
 from pandas import Series, DataFrame
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 from transformers.utils import PaddingStrategy
 
 from cm3p.processing_cm3p import CM3PProcessor, get_metadata
 from config import DataSetConfig
 from data_utils import load_mmrs_metadata, filter_mmrs_metadata, load_audio_file
+
+logger = logging.getLogger(__name__)
+
+
+def worker_init_fn(worker_id: int) -> None:
+    """
+    Initializes the logging for each dataloader worker to a separate file.
+    Gives each dataloader a unique slice of the full dataset.
+    """
+    worker_info = get_worker_info()
+    dataset: MmrsDataset = worker_info.dataset  # the dataset copy in this worker process
+    overall_start = dataset.start
+    overall_end = dataset.end
+    # configure the dataset to only process the split workload
+    per_worker = int(
+        np.ceil((overall_end - overall_start) / float(worker_info.num_workers)),
+    )
+    dataset.start = overall_start + worker_id * per_worker
+    dataset.end = min(dataset.start + per_worker, overall_end)
+
+    # Set-up logging to a file specific to this worker
+    os.mkdir('dataloader') if not os.path.exists('dataloader') else None
+    log_file_path = os.path.join('dataloader', f'worker_{worker_id}.log')
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        filename=log_file_path,
+        filemode='w'
+    )
+
+    # Configure the logging system to capture warnings
+    # This redirects warnings.warn() to the logger
+    logging.captureWarnings(True)
+
+    # Example of what you might log, print, or warn from a worker
+    logging.info(f"Worker {worker_id} started.")
 
 
 class MmrsDataset(IterableDataset):
@@ -38,6 +76,8 @@ class MmrsDataset(IterableDataset):
         self.start = args.test_dataset_start if test else args.train_dataset_start
         self.end = args.test_dataset_end if test else args.train_dataset_end
         self.metadata = load_mmrs_metadata(self.paths)
+        self.start = self.start or 0
+        self.end = self.end or len(self.metadata.index.get_level_values(0).unique())
         self.subset_ids = subset_ids
 
     def _get_filtered_metadata(self):
@@ -145,6 +185,7 @@ class BeatmapDatasetIterable:
 
     def _get_next_tracks(self) -> dict:
         for beatmapset_id in self.metadata.index.get_level_values(0).unique():
+            logger.info(f"Processing beatmap set ID: {beatmapset_id}")
             metadata = self.metadata.loc[beatmapset_id]
             first_beatmap_metadata = metadata.iloc[0]
 
@@ -164,11 +205,13 @@ class BeatmapDatasetIterable:
             if audio_path in audio_cache:
                 audio_samples = audio_cache[audio_path]
             else:
+                logger.info(f"Loading audio file: {audio_path}")
                 audio_samples = load_audio_file(audio_path, self.args.sampling_rate, speed)
                 audio_cache[audio_path] = audio_samples
+                logger.info(f"Audio length: {len(audio_samples) / self.args.sampling_rate:.2f} seconds")
         except Exception as e:
-            print(f"Failed to load audio file: {audio_path}")
-            print(e)
+            logger.warning(f"Failed to load audio file: {audio_path}")
+            logger.warning(e)
             return
 
         try:
@@ -185,8 +228,8 @@ class BeatmapDatasetIterable:
                 return_tensors="pt",
             )
         except Exception as e:
-            print(f"Failed to process beatmap: {beatmap_path}")
-            print(e)
+            logger.warning(f"Failed to process beatmap: {beatmap_path}")
+            logger.warning(e)
             return
 
         # Split the batch feature and yield each individual sample, so we can interleave and create varied batches

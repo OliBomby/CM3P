@@ -96,10 +96,10 @@ def filter_mmrs_metadata(
         df = df[df["ModeInt"].isin(gamemodes)]
 
     if min_year is not None:
-        df = df[df["RankedDate"] >= datetime(min_year, 1, 1)]
+        df = df[df["SubmittedDate"] >= datetime(min_year, 1, 1)]
 
     if max_year is not None:
-        df = df[df["RankedDate"] < datetime(max_year + 1, 1, 1)]
+        df = df[df["SubmittedDate"] < datetime(max_year + 1, 1, 1)]
 
     if min_difficulty is not None:
         df = df[df["DifficultyRating"] >= min_difficulty]

@@ -17,7 +17,7 @@ from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
 from config import TrainConfig
-from data_utils import filter_mmrs_metadata, load_mmrs_metadata
+from utils.data_utils import filter_mmrs_metadata, load_mmrs_metadata
 from mmrs_dataset import MmrsDataset, worker_init_fn
 
 logger = logging.getLogger(__name__)

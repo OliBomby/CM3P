@@ -15,7 +15,7 @@ from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
 from config import TrainConfig
-from data_utils import filter_mmrs_metadata, load_mmrs_metadata
+from utils.data_utils import filter_mmrs_metadata, load_mmrs_metadata
 from mmrs_dataset import MmrsDataset
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 def main(args: TrainConfig):
     # Parse input arguments
     args = OmegaConf.to_object(args)
+
+    use_muon = False
+    if args.training.get("optim", None) == "muon":
+        use_muon = True
+        del args.training["optim"]
+
     training_args = TrainingArguments(**args.training)
 
     if args.wandb_project is not None:
@@ -152,6 +158,37 @@ def main(args: TrainConfig):
     if args.freeze_metadata_model:
         _freeze_params(model.metadata_model)
 
+    # Configure custom optimizer if needed
+    optimizers = (None, None)
+    if use_muon:
+        from utils.muon_utils import Muon
+        """
+        Muon is intended to optimize only the internal ≥2D parameters of a network. 
+        Embeddings, classifier heads, and scalar or vector parameters should be optimized using AdamW.
+        """
+        adamw_params = [
+            param for name, param in model.named_parameters()
+            if (any(kw in name.lower() for kw in {'embed', 'proj_out'}) or param.ndim <= 1)
+        ]
+
+        adamw_param_set = set(adamw_params)
+        muon_params = [
+            param for _, param in model.named_parameters()
+            if param not in adamw_param_set
+        ]
+        print(f"Number of parameters for Muon: {len(muon_params)}")
+        print(f"Number of parameters for AdamW: {len(adamw_params)}")
+
+        optimizers = (Muon(
+            muon_params=muon_params,
+            lr=training_args.learning_rate,
+            adamw_lr=training_args.learning_rate / 4,
+            adamw_params=adamw_params,
+            adamw_betas=(training_args.adam_beta1, training_args.adam_beta2),
+            adamw_wd=training_args.weight_decay,
+            adamw_eps=training_args.adam_epsilon,
+        ), optimizers[1])
+
     # Initialize our trainer
     trainer = Trainer(
         model=model,
@@ -160,6 +197,7 @@ def main(args: TrainConfig):
         eval_dataset=eval_dataset if training_args.do_eval else None,
         data_collator=None,
         compute_metrics=None,
+        optimizers=optimizers,
         processing_class=processor,
     )
 

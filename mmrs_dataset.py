@@ -13,7 +13,7 @@ from transformers.utils import PaddingStrategy
 
 from cm3p.processing_cm3p import CM3PProcessor, get_metadata
 from config import DataSetConfig
-from data_utils import load_mmrs_metadata, filter_mmrs_metadata, load_audio_file
+from utils.data_utils import load_mmrs_metadata, filter_mmrs_metadata, load_audio_file
 
 logger = logging.getLogger(__name__)
 

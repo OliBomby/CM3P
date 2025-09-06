@@ -1,0 +1,9 @@
+defaults:
+  - default
+  - ../model@model: v1
+  - _self_
+
+
+training:
+  learning_rate: 4e-4
+  optim: "muon"

@@ -465,23 +465,24 @@ class CM3PProcessor(ProcessorMixin):
             else:
                 audio = [None] * len(beatmap)
 
-            if metadata is not None:
-                if not isinstance(metadata, list):
-                    metadata = [metadata]
-                if (multiply_metadata or populate_metadata) and len(metadata) != len(beatmap):
+            if multiply_metadata or populate_metadata and metadata is not None:
+                matched_metadata = metadata
+                if not isinstance(matched_metadata, list):
+                    matched_metadata = [matched_metadata]
+                if (multiply_metadata or populate_metadata) and len(matched_metadata) != len(beatmap):
                     raise ValueError(
-                        f"The number of metadata entries ({len(metadata)}) must match the number of beatmaps ({len(beatmap)})"
+                        f"The number of metadata entries ({len(matched_metadata)}) must match the number of beatmaps ({len(beatmap)})"
                         "` if multiply_metadata` or `populate_metadata` is set to True."
                     )
             else:
-                metadata = [CM3PMetadata()] * len(beatmap) if populate_metadata else [None] * len(beatmap)
+                matched_metadata = [CM3PMetadata()] * len(beatmap) if populate_metadata else [None] * len(beatmap)
 
             new_metadata = []
             batch_start_ms = []
             batch_groups = []
             batch_audio = []
             batch_num_audio_tokens = []
-            for b, m, audio_array in zip(beatmap, metadata, audio):
+            for b, m, audio_array in zip(beatmap, matched_metadata, audio):
                 b: Beatmap = load_beatmap(b)
                 song_length = get_song_length(audio_array, sampling_rate, b)
                 beatmap_groups = self.beatmap_parser.parse_beatmap(b, speed=speed, song_length=song_length)
@@ -543,7 +544,8 @@ class CM3PProcessor(ProcessorMixin):
                     if multiply_metadata:
                         add_metadata(start_sec / song_length)
 
-            metadata = new_metadata
+            if populate_metadata or multiply_metadata:
+                metadata = new_metadata
 
             if len(batch_groups) > 0:
                 beatmap_encoding = self.beatmap_tokenizer(

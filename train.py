@@ -49,6 +49,7 @@ def main(args: TrainConfig):
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
+        level=logging.INFO,
     )
 
     log_level = training_args.get_process_log_level()
@@ -75,6 +76,12 @@ def main(args: TrainConfig):
                 f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
+
+    checkpoint = None
+    if training_args.resume_from_checkpoint is not None:
+        checkpoint = training_args.resume_from_checkpoint
+    elif last_checkpoint is not None:
+        checkpoint = last_checkpoint
 
     # Load pretrained model, tokenizer, and image processor
     # Populate metadata tokenizer modes, mappers, and tags configs from dataset if not provided
@@ -146,7 +153,11 @@ def main(args: TrainConfig):
     assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "bos_token")
     assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "eos_token")
 
-    model = CM3PModel(model_config)
+    if not training_args.do_train and checkpoint is not None:
+        logger.warning(f"Loading model from checkpoint {checkpoint} for evaluation")
+        model = CM3PModel.from_pretrained(checkpoint, config=model_config)
+    else:
+        model = CM3PModel(model_config)
 
     def _freeze_params(module):
         for param in module.parameters():
@@ -203,11 +214,6 @@ def main(args: TrainConfig):
 
     # Training
     if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()
         processor.save_pretrained(training_args.output_dir)

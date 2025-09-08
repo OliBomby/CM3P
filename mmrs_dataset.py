@@ -23,17 +23,6 @@ def worker_init_fn(worker_id: int) -> None:
     Initializes the logging for each dataloader worker to a separate file.
     Gives each dataloader a unique slice of the full dataset.
     """
-    worker_info = get_worker_info()
-    dataset: MmrsDataset = worker_info.dataset  # the dataset copy in this worker process
-    overall_start = dataset.start
-    overall_end = dataset.end
-    # configure the dataset to only process the split workload
-    per_worker = int(
-        np.ceil((overall_end - overall_start) / float(worker_info.num_workers)),
-    )
-    dataset.start = overall_start + worker_id * per_worker
-    dataset.end = min(dataset.start + per_worker, overall_end)
-
     # Set-up logging to a file specific to this worker
     os.mkdir('dataloader') if not os.path.exists('dataloader') else None
     log_file_path = os.path.join('dataloader', f'worker_{worker_id}.log')
@@ -50,6 +39,22 @@ def worker_init_fn(worker_id: int) -> None:
 
     # Example of what you might log, print, or warn from a worker
     logging.info(f"Worker {worker_id} started.")
+
+
+def get_worker_start_end(overall_start: int, overall_end: int) -> tuple[int, int]:
+    """Get the start and end indices for the current worker."""
+    worker_info = get_worker_info()
+    if worker_info is None:
+        return overall_start, overall_end
+    worker_id = worker_info.id
+    # configure the dataset to only process the split workload
+    per_worker = int(
+        np.ceil((overall_end - overall_start) / float(worker_info.num_workers)),
+    )
+    start = overall_start + worker_id * per_worker
+    end = min(start + per_worker, overall_end)
+    print(f"Filtering metadata with start={start}, end={end}")
+    return start, end
 
 
 class MmrsDataset(IterableDataset):
@@ -80,12 +85,14 @@ class MmrsDataset(IterableDataset):
         self.end = self.end or len(self.metadata.index.get_level_values(0).unique())
         self.subset_ids = subset_ids
 
-    def _get_filtered_metadata(self):
+    def _get_filtered_metadata(self, start=None, end=None):
         """Get the subset IDs for the dataset with all filtering applied."""
+        start = start or self.start
+        end = end or self.end
         return filter_mmrs_metadata(
             self.metadata,
-            start=self.start,
-            end=self.end,
+            start=start,
+            end=end,
             subset_ids=self.subset_ids,
             gamemodes=self.args.gamemodes,
             min_year=self.args.min_year,
@@ -95,7 +102,7 @@ class MmrsDataset(IterableDataset):
         )
 
     def __iter__(self):
-        filtered_metadata = self._get_filtered_metadata()
+        filtered_metadata = self._get_filtered_metadata(*get_worker_start_end(self.start, self.end))
 
         if not self.test:
             subset_ids = filtered_metadata.index.get_level_values(0).unique().to_numpy()

@@ -102,7 +102,7 @@ class MmrsDataset(IterableDataset):
             np.random.shuffle(subset_ids)
             filtered_metadata = filtered_metadata.loc[subset_ids]
 
-        if self.args.cycle_length > 1 and not self.test:
+        if self.args.cycle_length > 1:
             return InterleavingBeatmapDatasetIterable(
                 filtered_metadata,
                 self._iterable_factory,

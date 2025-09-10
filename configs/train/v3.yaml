@@ -1,0 +1,23 @@
+defaults:
+  - default
+  - ../model@model: v1
+  - _self_
+
+
+training:
+  learning_rate: 4e-4
+  optim: "muon"
+
+processor:
+  beatmap_tokenizer:
+    add_cls_token: true
+
+  metadata_tokenizer:
+    add_cls_token: true
+
+model:
+    metadata_config:
+        cls_embed: true
+
+    beatmap_config:
+        cls_embed: true

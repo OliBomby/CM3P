@@ -42,6 +42,7 @@ class BeatmapTokenizerConfig:
     position_range: tuple[int, int, int, int]
     position_step: int
     position_split_axes: bool
+    add_cls_token: bool
 
 
 @dataclass
@@ -57,6 +58,7 @@ class MetadataTokenizerConfig:
     global_sv_step: float
     hold_note_ratio_step: float
     scroll_speed_ratio_step: float
+    add_cls_token: bool
     modes: Optional[dict[int, str]] = None
     statuses: Optional[dict[int, str]] = None
     mappers: Optional[dict[int, str]] = None

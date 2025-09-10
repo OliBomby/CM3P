@@ -25,6 +25,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             position_range: tuple[int, int, int, int] = (-256, 768, -256, 640),
             position_step: int = 4,
             position_split_axes: bool = True,
+            add_cls_token: bool = False,
             **kwargs,
     ):
         self.min_time = min_time
@@ -35,6 +36,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         self.position_range = position_range
         self.position_step = position_step
         self.position_split_axes = position_split_axes
+        self.add_cls_token = add_cls_token
 
         self.audio_bos_token = "[AUDIO_BOS]"
         self.audio_eos_token = "[AUDIO_EOS]"
@@ -68,6 +70,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             position_range=position_range,
             position_step=position_step,
             position_split_axes=position_split_axes,
+            add_cls_token=add_cls_token,
             **kwargs
         )
 
@@ -155,10 +158,13 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             self,
             groups: list[Group],
             window_start_ms: Optional[int] = None,
-            **kwargs
+            **_
     ):
         window_start_ms = window_start_ms or 0
-        tokens = [self.bos_token]
+        tokens = []
+        if self.add_cls_token:
+            tokens.append(self.cls_token)
+        tokens.append(self.bos_token)
 
         for group in groups:
             tokens.append(f"[{group.event_type.value.upper()}]")
@@ -353,6 +359,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             global_sv_step: float = 0.01,
             hold_note_ratio_step: float = 0.1,
             scroll_speed_ratio_step: float = 0.1,
+            add_cls_token: bool = False,
             **kwargs,
     ):
         self.min_difficulty = min_difficculty
@@ -366,6 +373,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         self.global_sv_step = global_sv_step
         self.hold_note_ratio_step = hold_note_ratio_step
         self.scroll_speed_ratio_step = scroll_speed_ratio_step
+        self.add_cls_token = add_cls_token
 
         self.difficulty_unk_token = "[DIFFICULTY_UNK]"
         self.year_unk_token = "[YEAR_UNK]"
@@ -407,6 +415,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             bos_token=kwargs.pop("bos_token", "[BOS]"),
             eos_token=kwargs.pop("eos_token", "[EOS]"),
             pad_token=kwargs.pop("pad_token", "[PAD]"),
+            cls_token=kwargs.pop("cls_token", "[CLS]"),
             additional_special_tokens=kwargs.pop("additional_special_tokens", [
                 self.difficulty_unk_token,
                 self.year_unk_token,
@@ -438,6 +447,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             global_sv_step=global_sv_step,
             hold_note_ratio_step=hold_note_ratio_step,
             scroll_speed_ratio_step=scroll_speed_ratio_step,
+            add_cls_token=add_cls_token,
             **kwargs
         )
 
@@ -604,7 +614,10 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         return [f"[TAG_{tag}]" for tag in new_tags]
 
     def _tokenize_metadata(self, metadata: CM3PMetadata):
-        tokens = [
+        tokens = []
+        if self.add_cls_token:
+            tokens.append(self.cls_token)
+        tokens.extend([
             self.bos_token,
             self._tokenize_difficulty(metadata),
             self._tokenize_year(metadata),
@@ -619,7 +632,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             self._tokenize_mania_keycount(metadata),
             self._tokenize_hold_note_ratio(metadata),
             self._tokenize_scroll_speed_ratio(metadata),
-        ]
+        ])
         tokens.extend(self._tokenize_tags(metadata))
         tokens.append(self.eos_token)
         return tokens

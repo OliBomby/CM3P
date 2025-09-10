@@ -72,6 +72,7 @@ processor:
     position_range: [-256, 768, -256, 640]
     position_step: 4
     position_split_axes: True
+    add_cls_token: false
 
   metadata_tokenizer:
     min_difficculty: 0.0
@@ -85,6 +86,7 @@ processor:
     global_sv_step: 0.01
     hold_note_ratio_step: 0.1
     scroll_speed_ratio_step: 0.1
+    add_cls_token: false
 
   default_kwargs:
       beatmap_kwargs:

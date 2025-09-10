@@ -236,7 +236,10 @@ class CM3PMetadataTransformer(nn.Module):
         )
 
         last_hidden_state = encoder_outputs.last_hidden_state
-        pooled_output = torch.mean(last_hidden_state, dim=1)
+        if self.config.cls_embed:
+            pooled_output = last_hidden_state[:, 0]
+        else:
+            pooled_output = torch.mean(last_hidden_state, dim=1)
 
         return BaseModelOutputWithPooling(
             last_hidden_state=last_hidden_state,
@@ -397,7 +400,10 @@ class CM3PBeatmapTransformer(nn.Module):
         )
 
         last_hidden_state = encoder_outputs.last_hidden_state
-        pooled_output = torch.mean(last_hidden_state, dim=1)
+        if self.config.cls_embed:
+            pooled_output = last_hidden_state[:, 0]
+        else:
+            pooled_output = torch.mean(last_hidden_state, dim=1)
 
         return CM3PBeatmapModelOutput(
             last_hidden_state=last_hidden_state,

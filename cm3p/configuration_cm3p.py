@@ -13,6 +13,8 @@ class CM3PMetadataConfig(PretrainedConfig):
 
     def __init__(
         self,
+        cls_embed=False,
+
         projection_dim=512,
         initializer_factor=1.0,
 
@@ -50,6 +52,8 @@ class CM3PMetadataConfig(PretrainedConfig):
             eos_token_id=eos_token_id,
             **kwargs,
         )
+
+        self.cls_embed = cls_embed
 
         self.projection_dim = projection_dim
         self.initializer_range = initializer_range
@@ -182,6 +186,7 @@ class CM3PBeatmapConfig(PretrainedConfig):
         audio_sos_token_id=3164,
         audio_eos_token_id=3165,
         audio_token_id=3166,
+        cls_embed=False,
 
         projection_dim=512,
         initializer_factor=1.0,
@@ -232,6 +237,7 @@ class CM3PBeatmapConfig(PretrainedConfig):
         self.audio_sos_token_id = audio_sos_token_id
         self.audio_eos_token_id = audio_eos_token_id
         self.audio_token_id = audio_token_id
+        self.cls_embed = cls_embed
 
         self.projection_dim = projection_dim
         self.initializer_factor = initializer_factor

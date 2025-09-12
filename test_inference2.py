@@ -6,7 +6,7 @@ from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PMetadata
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-save_path = "saved_logs/train_v2/trainer_output/checkpoint-30000"
+save_path = r"saved_logs/train_v3/trainer_output/checkpoint-30000"
 
 processor = CM3PProcessor.from_pretrained(save_path)
 model = CM3PModel.from_pretrained(save_path, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="flash_attention_2")
@@ -60,6 +60,13 @@ def classify_labels(name, labels):
         most_likely_idx = prob.argmax().item()
         most_likely_label = labels[most_likely_idx][name]
         print(f"Most likely label: {name}={most_likely_label} with probability: {prob[most_likely_idx].item():.3f}")
+        # Print top 5 labels
+        top5_idx = prob.topk(min(5, len(prob))).indices.tolist()
+        top5_labels = [(labels[i][name], prob[i].item()) for i in top5_idx]
+        print("Top 5 labels:")
+        for lbl, p in top5_labels:
+            print(f"  {name}={lbl} with probability: {p:.3f}")
+        print()
 
 classify_labels("difficulty", [metadata(difficulty=float(d)) for d in np.linspace(1.0, 14.0, num=14)])
 classify_labels("mode", [metadata(mode=m) for m in ["osu", "taiko", "fruits", "mania"]])

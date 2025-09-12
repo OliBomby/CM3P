@@ -238,6 +238,14 @@ class CM3PMetadataTransformer(nn.Module):
         last_hidden_state = encoder_outputs.last_hidden_state
         if self.config.cls_embed:
             pooled_output = last_hidden_state[:, 0]
+        elif attention_mask is not None:
+            # Use the attention mask to exclude padding tokens
+            expanded_attention_mask = attention_mask.unsqueeze(-1).float()
+            masked_hidden_states = last_hidden_state * expanded_attention_mask
+            sum_hidden_states = torch.sum(masked_hidden_states, dim=1)
+            sum_attention_mask = torch.sum(expanded_attention_mask, dim=1)
+            pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
+            pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
         else:
             pooled_output = torch.mean(last_hidden_state, dim=1)
 
@@ -402,6 +410,14 @@ class CM3PBeatmapTransformer(nn.Module):
         last_hidden_state = encoder_outputs.last_hidden_state
         if self.config.cls_embed:
             pooled_output = last_hidden_state[:, 0]
+        elif attention_mask is not None:
+            # Use the attention mask to exclude padding tokens
+            expanded_attention_mask = attention_mask.unsqueeze(-1).float()
+            masked_hidden_states = last_hidden_state * expanded_attention_mask
+            sum_hidden_states = torch.sum(masked_hidden_states, dim=1)
+            sum_attention_mask = torch.sum(expanded_attention_mask, dim=1)
+            pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
+            pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
         else:
             pooled_output = torch.mean(last_hidden_state, dim=1)
 

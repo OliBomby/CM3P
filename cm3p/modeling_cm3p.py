@@ -265,6 +265,8 @@ class CM3PMetadataTransformer(nn.Module):
             last_hidden_state = last_hidden_state.view(
                 batch_size, -1, last_hidden_state.size(-2), last_hidden_state.size(-1)
             )
+            if attention_mask is not None:
+                attention_mask = attention_mask.view(batch_size, -1, attention_mask.size(-1))
 
         if self.config.cls_embed:
             pooled_output = last_hidden_state[..., 0, :]

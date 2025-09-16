@@ -416,7 +416,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             bos_token=kwargs.pop("bos_token", "[BOS]"),
             eos_token=kwargs.pop("eos_token", "[EOS]"),
             pad_token=kwargs.pop("pad_token", "[PAD]"),
-            cls_token=kwargs.pop("cls_token", "[CLS]"),
+            cls_token=kwargs.pop("cls_token", "[CLS]") if add_cls_token else None,
             additional_special_tokens=kwargs.pop("additional_special_tokens", [
                 self.difficulty_unk_token,
                 self.year_unk_token,

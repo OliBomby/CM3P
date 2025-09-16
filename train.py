@@ -63,7 +63,7 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
             class_mask: torch.BoolTensor = ((metadata_variation_classes[i] == var_class) |
                                             (metadata_variation_classes[i] == 0))  # Include original class 0
 
-            if class_mask.sum() == 0:
+            if class_mask.sum() <= 1:  # Skip if there is only one example (no variation)
                 continue
 
             # Get logits for this group

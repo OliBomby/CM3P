@@ -94,6 +94,8 @@ class DataSetConfig:
     dt_augment_range: list[float]
     dt_augment_sqrt: bool
     sampling_rate: int
+    test_metadata_variations: int
+    train_metadata_variations: int
 
 
 @dataclass

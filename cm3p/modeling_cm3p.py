@@ -24,14 +24,30 @@ logger = logging.get_logger(__name__)
 
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/2021-03-07-clip.html
-def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
+def contrastive_loss(logits: torch.Tensor, target: torch.LongTensor = None) -> torch.Tensor:
+    target = target if target is not None else torch.arange(len(logits), device=logits.device)
+    return nn.functional.cross_entropy(logits, target)
 
 
 # CM3P loss function, adapted from CLIP
-def cm3p_loss(similarity: torch.Tensor) -> torch.Tensor:
-    metadata_loss = contrastive_loss(similarity)
-    beatmap_loss = contrastive_loss(similarity.t())
+def cm3p_loss(similarity: torch.Tensor, metadata_variation_classes: torch.LongTensor = None) -> torch.Tensor:
+    if similarity.dim() == 3:  # (metadata_batch_size, variations, beatmap_batch_size)
+        metadata_batch_size = similarity.size(0)
+        num_variations = similarity.size(1)
+        beatmap_batch_size = similarity.size(2)
+        assert metadata_batch_size == beatmap_batch_size
+
+        true_metadata_indices = (metadata_variation_classes == 0).int().argmax(dim=1)
+        metadata_loss = contrastive_loss(similarity[torch.arange(metadata_batch_size), true_metadata_indices])  # only use original metadata for loss
+
+        beatmap_similarity = similarity.permute(2, 0, 1)  # (beatmap_batch_size, metadata_batch_size, variations)
+        beatmap_similarity = beatmap_similarity.reshape(beatmap_batch_size, -1)  # (beatmap_batch_size, metadata_batch_size * variations)
+        target = torch.arange(0, beatmap_similarity.size(1), num_variations, device=similarity.device)  # (metadata_batch_size,)
+        target += true_metadata_indices
+        beatmap_loss = contrastive_loss(beatmap_similarity, target=target)
+    else:
+        metadata_loss = contrastive_loss(similarity)
+        beatmap_loss = contrastive_loss(similarity.t())
     return (metadata_loss + beatmap_loss) / 2.0
 
 
@@ -228,26 +244,40 @@ class CM3PMetadataTransformer(nn.Module):
         if input_ids is None:
             raise ValueError("You have to specify input_ids")
 
+        is_3d = input_ids.dim() == 3
+        batch_size = input_ids.size(0)
+        if is_3d:
+            # flatten to 2D batch if multiple metadata variations are provided
+            input_ids = input_ids.view(-1, input_ids.size(-1))
+            if attention_mask is not None:
+                attention_mask = attention_mask.view(-1, attention_mask.size(-1))
+
         encoder_outputs: BaseModelOutput = self.encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
-
         last_hidden_state = encoder_outputs.last_hidden_state
+
+        if is_3d:
+            # un-flatten back to 3D batch (batch_size, variations, seq_length, hidden_size)
+            last_hidden_state = last_hidden_state.view(
+                batch_size, -1, last_hidden_state.size(-2), last_hidden_state.size(-1)
+            )
+
         if self.config.cls_embed:
-            pooled_output = last_hidden_state[:, 0]
+            pooled_output = last_hidden_state[..., 0, :]
         elif attention_mask is not None:
             # Use the attention mask to exclude padding tokens
             expanded_attention_mask = attention_mask.unsqueeze(-1).float()
             masked_hidden_states = last_hidden_state * expanded_attention_mask
-            sum_hidden_states = torch.sum(masked_hidden_states, dim=1)
-            sum_attention_mask = torch.sum(expanded_attention_mask, dim=1)
+            sum_hidden_states = torch.sum(masked_hidden_states, dim=-2)
+            sum_attention_mask = torch.sum(expanded_attention_mask, dim=-2)
             pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
             pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
         else:
-            pooled_output = torch.mean(last_hidden_state, dim=1)
+            pooled_output = torch.mean(last_hidden_state, dim=-2)
 
         return BaseModelOutputWithPooling(
             last_hidden_state=last_hidden_state,
@@ -601,6 +631,7 @@ class CM3PModel(CM3PPreTrainedModel):
         metadata_attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        metadata_variation_classes: Optional[torch.LongTensor] = None,
         return_loss: Optional[bool] = True,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -609,10 +640,13 @@ class CM3PModel(CM3PPreTrainedModel):
         input_features (`torch.FloatTensor` of shape `(batch_size, num_frames, num_mels)`, *optional*):
             The audio frames to be processed by the audio encoder. If provided, the model will use these frames to
             compute the beatmap embeddings.
-        metadata_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
+        metadata_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)` or `(batch_size, variations, sequence_length)`):
             The input IDs for the metadata model. The model will use these IDs to compute the metadata embeddings.
-        metadata_attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+        metadata_attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)` or `(batch_size, variations, sequence_length)`, *optional*):
             The attention mask for the metadata model. If provided, the model will not attend to the padded tokens.
+        metadata_variation_classes (`torch.LongTensor` of shape `(batch_size, variations)`, *optional*):
+            Tells the model what kind of variation each metadata sequence is.
+            0 indicates the original metadata, -1 indicates paddidng, and any positive integer indicates a specific variation class.
         return_loss (`bool`, *optional*):
             Whether to return the contrastive loss.
         """
@@ -621,6 +655,9 @@ class CM3PModel(CM3PPreTrainedModel):
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
+
+        if metadata_ids.dim() == 3 and return_loss and metadata_variation_classes is None:
+            raise ValueError("When providing multiple metadata variations, metadata_variation_classes must be provided in order to compute loss correctly.")
 
         beatmap_outputs: BaseModelOutputWithPooling = self.beatmap_model(
             input_ids=input_ids,
@@ -653,11 +690,14 @@ class CM3PModel(CM3PPreTrainedModel):
         logits_per_metadata = torch.matmul(metadata_embeds, beatmap_embeds.t().to(metadata_embeds.device))
         logits_per_metadata = logits_per_metadata * self.logit_scale.exp().to(metadata_embeds.device)
 
-        logits_per_beatmap = logits_per_metadata.t()
+        if logits_per_metadata.dim() == 3:
+            logits_per_beatmap = logits_per_metadata.permute(2, 0, 1)
+        else:
+            logits_per_beatmap = logits_per_metadata.t()
 
         loss = None
         if return_loss:
-            loss = cm3p_loss(logits_per_metadata)
+            loss = cm3p_loss(logits_per_metadata, metadata_variation_classes)
 
         return CM3POutput(
             loss=loss,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import traceback
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -230,17 +231,21 @@ class BeatmapDatasetIterable:
                 speed=speed,
                 multiply_metadata=True,
                 populate_metadata=True,
-                metadata_dropout_prob=self.args.metadata_dropout_prob,
+                metadata_dropout_prob=self.args.metadata_dropout_prob if not self.test else 0.0,
+                metadata_variations=self.args.test_metadata_variations if self.test else self.args.train_metadata_variations,
                 padding=PaddingStrategy.MAX_LENGTH,
                 return_tensors="pt",
             )
         except Exception as e:
             logger.warning(f"Failed to process beatmap: {beatmap_path}")
             logger.warning(e)
+            traceback.print_exc()
             return
 
         # Split the batch feature and yield each individual sample, so we can interleave and create varied batches
         batch_size = len(results["input_ids"])
+        assert len(results["attention_mask"]) == batch_size
+        assert len(results["input_features"]) == batch_size
         for i in range(batch_size):
             result = {key: results[key][i] for key in results}
             yield result

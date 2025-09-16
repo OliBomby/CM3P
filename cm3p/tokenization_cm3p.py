@@ -1,3 +1,4 @@
+import copy
 import json
 from typing import Optional, Union, TypedDict
 
@@ -317,7 +318,7 @@ class CM3PMetadata(TypedDict, total=False):
     hitsounded: bool  # Whether the beatmap is hitsounded (True/False)
     song_length: float  # Song length in seconds
     song_position: float  # Relative position in song [0.0-1.0], unitless
-    global_sv: float  # Global scroll velocity (osu!mania), multiplier
+    global_sv: float  # Global slider velocity (osu!standard/catch), multiplier
     mania_keycount: int  # Number of keys in osu!mania [1-18]
     hold_note_ratio: float  # Ratio of hold notes [0.0-1.0], unitless
     scroll_speed_ratio: float  # Ratio of scroll speed changes [0.0-1.0], unitless
@@ -599,19 +600,23 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         scroll_speed_ratio = round(scroll_speed_ratio / self.scroll_speed_ratio_step) * self.scroll_speed_ratio_step
         return f"[SCROLL_SPEED_RATIO_{scroll_speed_ratio:.1f}]"
 
-    def _tokenize_tags(self, metadata: CM3PMetadata):
-        tags = metadata.get('tags', None)
+    def _validate_tags(self, tags):
         if tags is None:
-            return [self.tag_unk_token]
+            return None
         new_tags = []
         for tag in tags:
             if isinstance(tag, str) and tag in self.tag_names_to_ids:
                 new_tags.append(tag)
             elif tag in self.tag_ids_to_names:
                 new_tags.append(self.tag_ids_to_names[tag])
-        if not new_tags:
+        return new_tags
+
+    def _tokenize_tags(self, metadata: CM3PMetadata):
+        tags = metadata.get('tags', None)
+        valid_tags = self._validate_tags(tags)
+        if not valid_tags:
             return [self.tag_unk_token]
-        return [f"[TAG_{tag}]" for tag in new_tags]
+        return [f"[TAG_{tag}]" for tag in valid_tags]
 
     def _tokenize_metadata(self, metadata: CM3PMetadata):
         tokens = []
@@ -671,6 +676,67 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
                 max_length=max_length,
                 return_tensors=return_tensors,
             )
+
+    def metadata_variations(self, metadata: CM3PMetadata, num_variations: Optional[int] = 1000) -> tuple[CM3PMetadata, int]:
+        # Add variations with one field changed at a time
+        current_num_variations = 0
+        if metadata["year"] is not None and self.min_year <= metadata["year"] <= self.max_year and current_num_variations < num_variations:
+            for year in range(self.min_year, self.max_year + 1):
+                if year != metadata["year"]:
+                    new_m = copy.deepcopy(metadata)
+                    new_m["year"] = year
+                    yield new_m, 1
+                    current_num_variations += 1
+        if metadata["status"] is not None and current_num_variations < num_variations:
+            current_status = self.status_ids_to_names.get(metadata["status"], None) or metadata["status"]
+            if current_status in self.status_names_to_ids:
+                for status in self.status_ids_to_names.values():
+                    if status != current_status:
+                        new_m = copy.deepcopy(metadata)
+                        new_m["status"] = status
+                        yield new_m, 2
+                        current_num_variations += 1
+        if metadata["tags"] is not None and len(metadata["tags"]) > 0 and current_num_variations < num_variations:
+            # Replace/add/remove some tags
+            current_tags = self._validate_tags(metadata["tags"])
+            if len(current_tags) > 0:
+                for tag in self.tag_ids_to_names.values():
+                    if tag not in current_tags:
+                        new_m = copy.deepcopy(metadata)
+                        new_m["tags"][np.random.randint(0, len(new_m["tags"]))] = tag
+                        yield new_m, 3
+                        current_num_variations += 1
+                for tag in self.tag_ids_to_names.values():
+                    if tag not in current_tags:
+                        new_m = copy.deepcopy(metadata)
+                        new_m["tags"].insert(np.random.randint(0, len(new_m["tags"]) + 1), tag)
+                        yield new_m, 3
+                        current_num_variations += 1
+            if len(current_tags) > 1:
+                for tag in current_tags:
+                    new_m = copy.deepcopy(metadata)
+                    new_tags = [t for t in current_tags if t != tag]
+                    new_m["tags"] = new_tags
+                    yield new_m, 3
+                    current_num_variations += 1
+        if metadata["mapper"] is not None and current_num_variations < num_variations:
+            current_mapper = self.mapper_names_to_ids.get(metadata["mapper"], None) or metadata["mapper"]
+            mapper_variations = list(self.mapper_ids_to_names.keys())
+            if current_mapper in self.mapper_ids_to_names:
+                mapper_variations.remove(current_mapper)
+            remaining_num_variations = num_variations - current_num_variations if num_variations is not None else None
+            if remaining_num_variations is not None and len(mapper_variations) > remaining_num_variations:
+                # Randomly sample mappers to avoid too many variations
+                mapper_variations = np.random.choice(mapper_variations, size=remaining_num_variations, replace=False)
+            for mapper in mapper_variations:
+                new_m = copy.deepcopy(metadata)
+                new_m["mapper"] = mapper
+                yield new_m, 4
+                current_num_variations += 1
+        if num_variations is not None and current_num_variations < num_variations:
+            # Add padding
+            for _ in range(num_variations - current_num_variations):
+                yield CM3PMetadata(), -1
 
     @property
     def vocab_size(self):

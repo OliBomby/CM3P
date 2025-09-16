@@ -1,6 +1,5 @@
 import json
 import logging
-import warnings
 import os
 import sys
 from pathlib import Path
@@ -81,7 +80,7 @@ def main(args: TrainConfig):
     dataset = MmrsDataset(
         args.dataset,
         processor=processor,
-        test=False,
+        test=True,
     )
 
     # Create dataloader

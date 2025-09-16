@@ -6,7 +6,7 @@ from pathlib import Path
 
 import hydra
 from omegaconf import OmegaConf
-from transformers import Trainer
+from transformers import Trainer, EvalPrediction
 from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers.trainer_utils import get_last_checkpoint, set_seed
 
@@ -19,6 +19,10 @@ from utils.data_utils import filter_mmrs_metadata, load_mmrs_metadata
 from mmrs_dataset import MmrsDataset
 
 logger = logging.getLogger(__name__)
+
+
+def compute_metrics(eval_pred: EvalPrediction) -> dict:
+    return {}
 
 
 # noinspection PyArgumentList
@@ -207,7 +211,8 @@ def main(args: TrainConfig):
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         data_collator=None,
-        compute_metrics=None,
+        compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=None,
         optimizers=optimizers,
         processing_class=processor,
     )

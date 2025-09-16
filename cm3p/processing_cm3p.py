@@ -109,7 +109,7 @@ def get_metadata(
         mania_keycount=int(circle_size) if mode == 3 and beatmap is not None else None,
         hold_note_ratio=get_hold_note_ratio(beatmap) if mode == 3 and beatmap is not None else None,
         scroll_speed_ratio=get_scroll_speed_ratio(beatmap) if mode in [1, 3] and beatmap is not None else None,
-        tags=beatmap_metadata["TopTagIds"] if beatmap_metadata is not None else None,
+        tags=beatmap_metadata["TopTagIds"].tolist() if beatmap_metadata is not None else None,
     )
 
 
@@ -421,6 +421,7 @@ class CM3PProcessor(ProcessorMixin):
         multiply_metadata: bool = False,
         populate_metadata: bool = False,
         metadata_dropout_prob: float = 0.0,
+        metadata_variations: int = 1,
         **kwargs,
     ):
         output_kwargs = self._merge_kwargs(**kwargs)
@@ -436,9 +437,10 @@ class CM3PProcessor(ProcessorMixin):
         metadata_max_length = metadata_kwargs.get("max_length", 128)
         sampling_rate = audio_kwargs["sampling_rate"]
         max_source_positions = audio_kwargs.get("max_source_positions", 3000)
+        audio_kwargs["padding"] = False
         return_tensors = common_kwargs["return_tensors"]
 
-        metadata_encoding, beatmap_encoding, num_audio_tokens = None, None, None
+        metadata_encoding, beatmap_encoding, num_audio_tokens, metadata_variation_classes = None, None, None, None
 
         if return_tensors is not None and return_tensors != "pt":
             raise ValueError(f"{self.__class__.__name__} only supports `return_tensors='pt'` or `return_tensors=None`.")
@@ -586,11 +588,33 @@ class CM3PProcessor(ProcessorMixin):
                             # noinspection PyTypedDict
                             m[key] = None
 
+            if metadata_variations > 1:
+                extended_metadata = []
+                metadata_variation_classes = []
+                for m in metadata:
+                    m_vars, m_classes = zip(*self.metadata_tokenizer.metadata_variations(m, metadata_variations - 1))
+                    extended_metadata.append(m)
+                    extended_metadata.extend(m_vars)
+                    metadata_variation_classes.append([0] + list(m_classes))  # Class 0 is the original metadata
+
+                assert len(extended_metadata) == len(metadata) * metadata_variations
+                metadata = extended_metadata
+
             if len(metadata) > 0:
                 metadata_encoding = self.metadata_tokenizer(
                     metadata,
                     **metadata_kwargs,
                 )
+                if metadata_variations > 1:
+                    # Reshape to (batch_size, variations, seq_len)
+                    for k, v in metadata_encoding.items():
+                        if return_tensors == "pt":
+                            v = v.view(len(metadata) // metadata_variations, metadata_variations, -1)
+                        else:
+                            v = [v[i:i + metadata_variations] for i in range(0, len(v), metadata_variations)]
+                        metadata_encoding[k] = v
+                if metadata_variation_classes is not None:
+                    metadata_encoding["metadata_variation_classes"] = torch.tensor(metadata_variation_classes, dtype=torch.long) if return_tensors == "pt" else metadata_variation_classes
             else:
                 metadata_encoding = BatchEncoding(
                     {
@@ -603,6 +627,8 @@ class CM3PProcessor(ProcessorMixin):
         if metadata_encoding is not None and beatmap_encoding is not None:
             beatmap_encoding["metadata_ids"] = metadata_encoding["input_ids"]
             beatmap_encoding["metadata_attention_mask"] = metadata_encoding["attention_mask"]
+            if "metadata_variation_classes" in metadata_encoding:
+                beatmap_encoding["metadata_variation_classes"] = metadata_encoding["metadata_variation_classes"]
             return beatmap_encoding
         elif beatmap_encoding is not None:
             return beatmap_encoding

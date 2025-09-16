@@ -54,7 +54,7 @@ def get_worker_start_end(overall_start: int, overall_end: int) -> tuple[int, int
     )
     start = overall_start + worker_id * per_worker
     end = min(start + per_worker, overall_end)
-    print(f"Filtering metadata with start={start}, end={end}")
+    logger.info(f"Filtering metadata with start={start}, end={end}")
     return start, end
 
 

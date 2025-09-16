@@ -277,8 +277,8 @@ def main(args: TrainConfig):
             param for _, param in model.named_parameters()
             if param not in adamw_param_set
         ]
-        print(f"Number of parameters for Muon: {len(muon_params)}")
-        print(f"Number of parameters for AdamW: {len(adamw_params)}")
+        logger.info(f"Number of parameters for Muon: {len(muon_params)}")
+        logger.info(f"Number of parameters for AdamW: {len(adamw_params)}")
 
         optimizers = (Muon(
             muon_params=muon_params,

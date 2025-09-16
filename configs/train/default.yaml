@@ -136,7 +136,7 @@ dataset:                  # Data settings
   dt_augment_range: [ 1.25, 1.5 ]  # Range of DT augmentation
   dt_augment_sqrt: false  # Sample DT augmentation from a square root distribution
   sampling_rate: ${..processor.audio_feature_extractor.sampling_rate}  # Audio sampling rate
-  test_metadata_variations: 1  # Number of metadata variations to generate during testing
+  test_metadata_variations: 1000  # Number of metadata variations to generate during testing
   train_metadata_variations: 1  # Number of metadata variations to generate during training
 
 hydra:

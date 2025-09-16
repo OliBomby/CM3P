@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import hydra
+import torch
 from omegaconf import OmegaConf
 from transformers import Trainer, EvalPrediction
 from transformers import TrainingArguments, WhisperFeatureExtractor
@@ -19,10 +20,95 @@ from utils.data_utils import filter_mmrs_metadata, load_mmrs_metadata
 from mmrs_dataset import MmrsDataset
 
 logger = logging.getLogger(__name__)
+accumulated_metrics = {}
 
 
-def compute_metrics(eval_pred: EvalPrediction) -> dict:
-    return {}
+def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
+    global accumulated_metrics
+
+    # Variation classes: -1 padding, 0 original, 1 year, 2 status, 3 tags, 4 mapper
+    variation_classes = {
+        -1: "padding",
+        0: "original",
+        1: "year",
+        2: "status",
+        3: "tags",
+        4: "mapper",
+    }
+    classes_range = range(1, 5)
+    classes_with_top5 = [3, 4]
+
+    # eval_pred.inputs["metadata_variation_classes"] (batch_size, num_variations)
+    # eval_pred.predictions[0]: logits_per_beatmap (batch_size, batch_size, num_variations)
+
+    # For each variation class, compute accuracy:
+    # For each example: Separate out the classes of metadata variations
+    # For each class group: Check if the highest logit corresponds to the original metadata (class 0)
+    # Compute accuracy for all classes and top-5 accuracy for tags and mappers
+
+    if "metadata_variation_classes" not in eval_pred.inputs:
+        return None
+
+    logits_per_beatmap: torch.FloatTensor = eval_pred.predictions[0]
+    metadata_variation_classes: torch.LongTensor = eval_pred.inputs["metadata_variation_classes"]
+    batch_size = logits_per_beatmap.shape[0]
+
+    for var_class in classes_range:  # Skip padding class -1
+        correct = 0
+        total = 0
+        top5_correct = 0
+
+        for i in range(batch_size):
+            # Get indices of examples with the same variation class
+            class_mask: torch.BoolTensor = ((metadata_variation_classes[i] == var_class) |
+                                            (metadata_variation_classes[i] == 0))  # Include original class 0
+
+            if class_mask.sum() == 0:
+                continue
+
+            # Get logits for this group
+            group_logits = logits_per_beatmap[i, i][class_mask]
+            group_classes = metadata_variation_classes[i][class_mask]
+
+            # Check if the highest logit corresponds to the original metadata (class 0)
+            total += 1
+
+            predicted_index = torch.argmax(group_logits).item()
+            if group_classes[predicted_index] == 0:
+                correct += 1
+
+            if var_class in classes_with_top5:
+                top5_indices = torch.topk(group_logits, k=min(5, group_logits.size(0))).indices
+                if (group_classes[top5_indices] == 0).any():
+                    top5_correct += 1
+
+        if var_class not in accumulated_metrics:
+            accumulated_metrics[var_class] = {"correct": 0, "total": 0, "top5_correct": 0}
+
+        accumulated_metrics[var_class]["correct"] += correct
+        accumulated_metrics[var_class]["total"] += total
+        accumulated_metrics[var_class]["top5_correct"] += top5_correct
+
+    if not compute_result:
+        return None
+
+    result = {}
+    for var_class, metrics in accumulated_metrics.items():
+        class_name = variation_classes.get(var_class, f"class_{var_class}")
+        if metrics["total"] > 0:
+            accuracy = metrics["correct"] / metrics["total"]
+            result[f"accuracy_{class_name}"] = accuracy
+            if var_class in classes_with_top5:
+                top5_accuracy = metrics["top5_correct"] / metrics["total"]
+                result[f"top5_accuracy_{class_name}"] = top5_accuracy
+        else:
+            result[f"accuracy_{class_name}"] = None
+            if var_class in classes_with_top5:
+                result[f"top5_accuracy_{class_name}"] = None
+
+    # Reset accumulated metrics after computing final result
+    accumulated_metrics = {}
+    return result
 
 
 # noinspection PyArgumentList

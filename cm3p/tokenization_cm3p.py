@@ -416,7 +416,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
             bos_token=kwargs.pop("bos_token", "[BOS]"),
             eos_token=kwargs.pop("eos_token", "[EOS]"),
             pad_token=kwargs.pop("pad_token", "[PAD]"),
-            cls_token=kwargs.pop("cls_token", "[CLS]") if add_cls_token else None,
+            cls_token=kwargs.pop("cls_token", "[CLS]"),
             additional_special_tokens=kwargs.pop("additional_special_tokens", [
                 self.difficulty_unk_token,
                 self.year_unk_token,
@@ -679,9 +679,10 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
 
     def metadata_variations(self, metadata: CM3PMetadata, num_variations: Optional[int] = 1000) -> tuple[CM3PMetadata, int]:
         # Add variations with one field changed at a time
+        min_year = max(2007, self.min_year)
         current_num_variations = 0
-        if metadata["year"] is not None and self.min_year <= metadata["year"] <= self.max_year and current_num_variations < num_variations:
-            for year in range(self.min_year, self.max_year + 1):
+        if metadata["year"] is not None and min_year <= metadata["year"] <= self.max_year and current_num_variations < num_variations:
+            for year in range(min_year, self.max_year + 1):
                 if year != metadata["year"]:
                     new_m = copy.deepcopy(metadata)
                     new_m["year"] = year

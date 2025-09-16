@@ -37,6 +37,9 @@ training:
   dataloader_drop_last: true
   dataloader_num_workers: 4
   torch_empty_cache_steps: 1
+  eval_accumulation_steps: 1
+  include_for_metrics: ['inputs']
+  batch_eval_metrics: true
 
 processor:
   audio_feature_extractor:

@@ -677,67 +677,96 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
                 return_tensors=return_tensors,
             )
 
-    def metadata_variations(self, metadata: CM3PMetadata, num_variations: Optional[int] = 1000) -> tuple[CM3PMetadata, int]:
-        # Add variations with one field changed at a time
-        min_year = max(2007, self.min_year)
-        current_num_variations = 0
-        if metadata["year"] is not None and min_year <= metadata["year"] <= self.max_year and current_num_variations < num_variations:
+    def metadata_variations(self, metadata: CM3PMetadata, num_variations: int = 1000) -> tuple[CM3PMetadata, int]:
+        def year_variations():
+            min_year = max(2007, self.min_year)
+            if metadata["year"] is None or (min_year > metadata["year"] or metadata["year"] > self.max_year):
+                return
             for year in range(min_year, self.max_year + 1):
                 if year != metadata["year"]:
                     new_m = copy.deepcopy(metadata)
                     new_m["year"] = year
                     yield new_m, 1
-                    current_num_variations += 1
-        if metadata["status"] is not None and current_num_variations < num_variations:
+
+        def status_variations():
+            if metadata["status"] is None:
+                return
             current_status = self.status_ids_to_names.get(metadata["status"], None) or metadata["status"]
-            if current_status in self.status_names_to_ids:
-                for status in self.status_ids_to_names.values():
-                    if status != current_status:
-                        new_m = copy.deepcopy(metadata)
-                        new_m["status"] = status
-                        yield new_m, 2
-                        current_num_variations += 1
-        if metadata["tags"] is not None and len(metadata["tags"]) > 0 and current_num_variations < num_variations:
-            # Replace/add/remove some tags
-            current_tags = self._validate_tags(metadata["tags"])
-            if len(current_tags) > 0:
-                for tag in self.tag_ids_to_names.values():
-                    if tag not in current_tags:
-                        new_m = copy.deepcopy(metadata)
-                        new_m["tags"][np.random.randint(0, len(new_m["tags"]))] = tag
-                        yield new_m, 3
-                        current_num_variations += 1
-                for tag in self.tag_ids_to_names.values():
-                    if tag not in current_tags:
-                        new_m = copy.deepcopy(metadata)
-                        new_m["tags"].insert(np.random.randint(0, len(new_m["tags"]) + 1), tag)
-                        yield new_m, 3
-                        current_num_variations += 1
-            if len(current_tags) > 1:
-                for tag in current_tags:
+            if current_status not in self.status_names_to_ids:
+                return
+            for status in self.status_ids_to_names.values():
+                if status != current_status:
                     new_m = copy.deepcopy(metadata)
-                    new_tags = [t for t in current_tags if t != tag]
-                    new_m["tags"] = new_tags
+                    new_m["status"] = status
+                    yield new_m, 2
+
+        def tags_variations():
+            # Replace/add/remove some tags
+            if metadata["tags"] is None or len(metadata["tags"]) <= 0:
+                return
+            current_tags = self._validate_tags(metadata["tags"])
+            if len(current_tags) <= 0:
+                return
+            for tag in self.tag_ids_to_names.values():
+                if tag not in current_tags:
+                    new_m = copy.deepcopy(metadata)
+                    new_m["tags"][np.random.randint(0, len(new_m["tags"]))] = tag
                     yield new_m, 3
-                    current_num_variations += 1
-        if metadata["mapper"] is not None and current_num_variations < num_variations:
+            for tag in self.tag_ids_to_names.values():
+                if tag not in current_tags:
+                    new_m = copy.deepcopy(metadata)
+                    new_m["tags"].insert(np.random.randint(0, len(new_m["tags"]) + 1), tag)
+                    yield new_m, 3
+            if len(current_tags) <= 1:
+                return
+            for tag in current_tags:
+                new_m = copy.deepcopy(metadata)
+                new_tags = [t for t in current_tags if t != tag]
+                new_m["tags"] = new_tags
+                yield new_m, 3
+
+        def mapper_variations():
+            if metadata['mapper'] is None:
+                return
             current_mapper = self.mapper_names_to_ids.get(metadata["mapper"], None) or metadata["mapper"]
             mapper_variations = list(self.mapper_ids_to_names.keys())
             if current_mapper in self.mapper_ids_to_names:
                 mapper_variations.remove(current_mapper)
-            remaining_num_variations = num_variations - current_num_variations if num_variations is not None else None
-            if remaining_num_variations is not None and len(mapper_variations) > remaining_num_variations:
-                # Randomly sample mappers to avoid too many variations
-                mapper_variations = np.random.choice(mapper_variations, size=remaining_num_variations, replace=False)
+            # Randomly sample mappers to avoid too many variations
+            np.random.shuffle(mapper_variations)
             for mapper in mapper_variations:
                 new_m = copy.deepcopy(metadata)
                 new_m["mapper"] = mapper
                 yield new_m, 4
-                current_num_variations += 1
-        if num_variations is not None and current_num_variations < num_variations:
-            # Add padding
-            for _ in range(num_variations - current_num_variations):
+
+        def padding_variations():
+            while True:
                 yield CM3PMetadata(), -1
+
+        # Add variations with one field changed at a time
+        current_num_variations = 0
+        workers = [
+            year_variations(),
+            status_variations(),
+            tags_variations(),
+            mapper_variations(),
+        ]
+        padding_iterable = padding_variations()
+
+        index = 0
+        while current_num_variations < num_variations and len(workers) > 0:
+            try:
+                index = index % len(workers)
+                item = workers[index].__next__()
+                index += 1
+                current_num_variations += 1
+                yield item
+            except StopIteration:
+                workers.remove(workers[index])
+
+        while current_num_variations < num_variations:
+            current_num_variations += 1
+            yield padding_iterable.__next__()
 
     @property
     def vocab_size(self):

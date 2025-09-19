@@ -6,7 +6,7 @@ from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PMetadata
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-save_path = r"saved_logs/train_v3/trainer_output/checkpoint-30000"
+save_path = r"saved_logs/train_v4/trainer_output/checkpoint-30000"
 
 processor = CM3PProcessor.from_pretrained(save_path)
 model = CM3PModel.from_pretrained(save_path, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="flash_attention_2")
@@ -73,4 +73,4 @@ classify_labels("mode", [metadata(mode=m) for m in ["osu", "taiko", "fruits", "m
 classify_labels("mapper", [metadata(mapper=m) for m in processor.metadata_tokenizer.mapper_ids_to_names.values()])
 classify_labels("year", [metadata(year=y) for y in range(2007, 2024)])
 classify_labels("tags", [metadata(tags=[t]) for t in processor.metadata_tokenizer.tag_ids_to_names.values()])
-classify_labels("status", [metadata(status=s) for s in ["ranked", "approved", "qualified", "loved", "pending", "graveyard"]])
+classify_labels("status", [metadata(status=s) for s in ["ranked", "approved", "loved", "pending", "graveyard"]])

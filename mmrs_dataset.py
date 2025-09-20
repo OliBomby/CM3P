@@ -42,20 +42,14 @@ def worker_init_fn(worker_id: int) -> None:
     logging.info(f"Worker {worker_id} started.")
 
 
-def get_worker_start_end(overall_start: int, overall_end: int) -> tuple[int, int]:
-    """Get the start and end indices for the current worker."""
+def get_worker_metadata_subset(metadata: DataFrame) -> DataFrame:
+    """Get the metadata subset for the current worker."""
     worker_info = get_worker_info()
     if worker_info is None:
-        return overall_start, overall_end
-    worker_id = worker_info.id
-    # configure the dataset to only process the split workload
-    per_worker = int(
-        np.ceil((overall_end - overall_start) / float(worker_info.num_workers)),
-    )
-    start = overall_start + worker_id * per_worker
-    end = min(start + per_worker, overall_end)
-    logger.info(f"Filtering metadata with start={start}, end={end}")
-    return start, end
+        return metadata
+    metadata_subset = metadata[worker_info.id::worker_info.num_workers]
+    logger.info(f"Worker {worker_info.id} processing {len(metadata_subset)} beatmaps.")
+    return metadata_subset
 
 
 class MmrsDataset(IterableDataset):
@@ -86,14 +80,12 @@ class MmrsDataset(IterableDataset):
         self.end = self.end or len(self.metadata.index.get_level_values(0).unique())
         self.subset_ids = subset_ids
 
-    def _get_filtered_metadata(self, start=None, end=None):
+    def _get_filtered_metadata(self):
         """Get the subset IDs for the dataset with all filtering applied."""
-        start = start or self.start
-        end = end or self.end
         return filter_mmrs_metadata(
             self.metadata,
-            start=start,
-            end=end,
+            start=self.start,
+            end=self.end,
             subset_ids=self.subset_ids,
             gamemodes=self.args.gamemodes,
             min_year=self.args.min_year,
@@ -103,7 +95,8 @@ class MmrsDataset(IterableDataset):
         )
 
     def __iter__(self):
-        filtered_metadata = self._get_filtered_metadata(*get_worker_start_end(self.start, self.end))
+        filtered_metadata = self._get_filtered_metadata()
+        filtered_metadata = get_worker_metadata_subset(filtered_metadata)
 
         if not self.test:
             subset_ids = filtered_metadata.index.get_level_values(0).unique().to_numpy()
@@ -140,8 +133,8 @@ class InterleavingBeatmapDatasetIterable:
             drop_last: bool = False,
     ):
         self.workers = [
-            iterable_factory(df).__iter__()
-            for df in np.array_split(metadata, cycle_length)  # Causes swapaxes future warning
+            iterable_factory(metadata[i::cycle_length]).__iter__()
+            for i in range(cycle_length)
         ]
         self.cycle_length = cycle_length
         self.index = 0

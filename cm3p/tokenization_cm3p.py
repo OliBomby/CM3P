@@ -8,7 +8,7 @@ from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import PaddingStrategy
 
 from cm3p import CM3PBeatmapConfig, CM3PMetadataConfig
-from cm3p.parsing_cm3p import Group, EventType
+from cm3p.parsing_cm3p import Group, EventType, EVENT_TYPES_WITH_NEW_COMBO
 
 
 class CM3PBeatmapTokenizer(PreTrainedTokenizer):
@@ -27,6 +27,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             position_step: int = 4,
             position_split_axes: bool = True,
             add_cls_token: bool = False,
+            separate_new_combo_token: bool = True,
             **kwargs,
     ):
         self.min_time = min_time
@@ -38,6 +39,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         self.position_step = position_step
         self.position_split_axes = position_split_axes
         self.add_cls_token = add_cls_token
+        self.separate_new_combo_token = separate_new_combo_token
 
         self.audio_bos_token = "[AUDIO_BOS]"
         self.audio_eos_token = "[AUDIO_EOS]"
@@ -72,6 +74,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
             position_step=position_step,
             position_split_axes=position_split_axes,
             add_cls_token=add_cls_token,
+            separate_new_combo_token=separate_new_combo_token,
             **kwargs
         )
 
@@ -80,6 +83,10 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
 
         for event_type in EventType:
             vocab.append(f"[{event_type.value.upper()}]")
+
+        if not self.separate_new_combo_token:
+            for event_type in EVENT_TYPES_WITH_NEW_COMBO:
+                vocab.append(f"[{event_type.value.upper()}_NEW_COMBO]")
 
         for time in np.arange(self.min_time, self.max_time + 1e-5, self.time_step):
             vocab.append(f"[TIME_SHIFT_{int(time)}]")
@@ -106,7 +113,8 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         for scroll_speed in np.arange(0.0, 10.0 + 1e-5, 0.01):
             vocab.append(f"[SCROLL_SPEED_{scroll_speed:.2f}]")
 
-        vocab.append("[NEW_COMBO]")
+        if self.separate_new_combo_token:
+            vocab.append("[NEW_COMBO]")
 
         for hitsound in range(8):
             for sampleset in range(1, 4):
@@ -168,7 +176,10 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         tokens.append(self.bos_token)
 
         for group in groups:
-            tokens.append(f"[{group.event_type.value.upper()}]")
+            if group.new_combo and not self.separate_new_combo_token and group.event_type in EVENT_TYPES_WITH_NEW_COMBO:
+                tokens.append(f"[{group.event_type.value.upper()}_NEW_COMBO]")
+            else:
+                tokens.append(f"[{group.event_type.value.upper()}]")
             if group.has_time:
                 tokens.append(self._tokenize_time_shift(group.time - window_start_ms))
                 if group.snapping is not None:
@@ -179,7 +190,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
                 tokens.extend(self._tokenize_position(group.x, group.y))
             if group.mania_column is not None:
                 tokens.append(self._tokenize_mania_column(group.mania_column))
-            if group.new_combo:
+            if group.new_combo and self.separate_new_combo_token:
                 tokens.append("[NEW_COMBO]")
             if group.scroll_speed is not None:
                 tokens.append(self._tokenize_scroll_speed(group.scroll_speed))

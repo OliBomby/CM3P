@@ -75,6 +75,7 @@ processor:
     position_step: 4
     position_split_axes: true
     add_cls_token: false
+    separate_new_combo_token: true
 
   metadata_tokenizer:
     min_difficculty: 0.0

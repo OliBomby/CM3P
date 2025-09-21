@@ -42,6 +42,7 @@ class BeatmapTokenizerConfig:
     position_step: int
     position_split_axes: bool
     add_cls_token: bool
+    separate_new_combo_token: bool
 
 
 @dataclass

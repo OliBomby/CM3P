@@ -39,6 +39,12 @@ class EventType(Enum):
     DENDEN_END = "denden_end"
 
 
+EVENT_TYPES_WITH_NEW_COMBO = [
+    EventType.CIRCLE,
+    EventType.SLIDER_HEAD,
+]
+
+
 @dataclasses.dataclass
 class Group:
     event_type: EventType = None
@@ -748,4 +754,4 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
 
 AutoFeatureExtractor.register(CM3PConfig, CM3PBeatmapParser)
 
-__all__ = ["CM3PBeatmapParser", "EventType", "Group", "load_beatmap", "get_song_length"]
+__all__ = ["CM3PBeatmapParser", "EventType", "Group", "load_beatmap", "get_song_length", "EVENT_TYPES_WITH_NEW_COMBO"]

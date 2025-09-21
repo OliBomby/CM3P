@@ -28,7 +28,6 @@ class BeatmapParserConfig:
     add_sv: bool
     add_mania_sv: bool
     mania_bpm_normalized_scroll_speed: bool
-    position_split_axes: bool
     slider_version: int
 
 

@@ -204,7 +204,6 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
             add_sv: bool = True,
             add_mania_sv: bool = True,
             mania_bpm_normalized_scroll_speed: bool = True,
-            position_split_axes: bool = True,
             slider_version: int = 2,
             **kwargs,
     ):
@@ -218,7 +217,6 @@ class CM3PBeatmapParser(FeatureExtractionMixin):
         self.add_sv = add_sv
         self.add_mania_sv = add_mania_sv
         self.mania_bpm_normalized_scroll_speed = mania_bpm_normalized_scroll_speed
-        self.position_split_axes = position_split_axes
         self.slider_version = slider_version
         super().__init__(**kwargs)
 

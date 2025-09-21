@@ -63,7 +63,6 @@ processor:
     add_sv: true
     add_mania_sv: true
     mania_bpm_normalized_scroll_speed: true
-    position_split_axes: true
     slider_version: 2
 
   beatmap_tokenizer:
@@ -74,7 +73,7 @@ processor:
     distance_step: 4
     position_range: [-256, 768, -256, 640]
     position_step: 4
-    position_split_axes: True
+    position_split_axes: true
     add_cls_token: false
 
   metadata_tokenizer:

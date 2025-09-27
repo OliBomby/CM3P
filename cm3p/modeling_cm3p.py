@@ -1039,6 +1039,7 @@ class CM3PBeatmapModelWithProjection(CM3PPreTrainedModel):
 )
 class CM3PForBeatmapClassification(CM3PPreTrainedModel):
     config_class = CM3PBeatmapConfig
+    base_model_prefix = "beatmap_model"
 
     def __init__(self, config: CM3PBeatmapConfig) -> None:
         super().__init__(config)

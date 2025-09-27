@@ -24,6 +24,7 @@ training:
   eval_strategy: 'steps'
   eval_steps: 1000
   max_steps: 30000
+  log_level: 'info'
   logging_strategy: 'steps'
   logging_steps: 10
   save_strategy: 'steps'

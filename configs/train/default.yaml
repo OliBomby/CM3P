@@ -6,6 +6,7 @@ freeze_metadata_model: false  # Whether to freeze the metadata model during trai
 attn_implementation: "flash_attention_2"
 
 wandb_project: "CM3P"
+wandb_entity: null
 wandb_mode: "online"  # Set to "online" to log to wandb server
 
 training:

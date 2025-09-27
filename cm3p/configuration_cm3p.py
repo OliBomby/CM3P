@@ -215,6 +215,8 @@ class CM3PBeatmapConfig(PretrainedConfig):
         mlp_bias=False,
         mlp_dropout=0.0,
         decoder_bias=True,
+        classifier_bias=False,
+        classifier_activation="gelu",
         deterministic_flash_attn=False,
         sparse_prediction=False,
         sparse_pred_ignore_index=-100,
@@ -262,6 +264,8 @@ class CM3PBeatmapConfig(PretrainedConfig):
         self.mlp_bias = mlp_bias
         self.mlp_dropout = mlp_dropout
         self.decoder_bias = decoder_bias
+        self.classifier_bias = classifier_bias
+        self.classifier_activation = classifier_activation
         self.deterministic_flash_attn = deterministic_flash_attn
         self.sparse_prediction = sparse_prediction
         self.sparse_pred_ignore_index = sparse_pred_ignore_index

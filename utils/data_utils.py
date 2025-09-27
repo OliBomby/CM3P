@@ -3,15 +3,10 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
-import pandas as pd
-import soxr
-from pandas import DataFrame, Series
-
 import numpy.typing as npt
-from slider import Beatmap, HoldNote
+import pandas as pd
+from pandas import DataFrame
 from transformers.audio_utils import load_audio
-
-from cm3p.tokenization_cm3p import CM3PMetadata
 
 
 def load_audio_file(file: str, sampling_rate: int, speed: float = 1.0) -> npt.NDArray:

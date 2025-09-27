@@ -1,17 +1,17 @@
 """PyTorch CM3P model."""
-
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from transformers import ModernBertModel, AutoModel, AutoModelForSequenceClassification
+from transformers import ModernBertModel, AutoModel, AutoModelForSequenceClassification, AutoModelForMaskedLM
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
     BaseModelOutput,
-    BaseModelOutputWithPooling,
+    BaseModelOutputWithPooling, MaskedLMOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, auto_docstring, can_return_tuple, logging
@@ -60,6 +60,78 @@ def _get_vector_norm(tensor: torch.Tensor) -> torch.Tensor:
     sum_tensor = torch.sum(square_tensor, dim=-1, keepdim=True)
     normed_tensor = torch.pow(sum_tensor, 0.5)
     return normed_tensor
+
+
+def _unpad_cm3p_input(
+    inputs: torch.Tensor,
+    attention_mask: torch.Tensor,
+    position_ids: Optional[torch.Tensor] = None,
+    labels: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    """
+    Remove padding from input sequences.
+
+    Args:
+        inputs: (batch, seqlen, ...) or (batch, seqlen)
+        attention_mask: (batch, seqlen), bool / int, 1 means valid and 0 means not valid.
+        position_ids: (batch, seqlen), int, position ids
+        labels: (batch, seqlen), int, labels
+
+    Returns:
+        unpadded_inputs: (total_nnz, ...), where total_nnz = number of tokens selected in attention_mask.
+        indices: (total_nnz)
+        cu_seqlens: (batch + 1), the cumulative sequence lengths
+        max_seqlen_in_batch: int
+        unpadded_position_ids: (total_nnz) or None
+        unpadded_labels: (total_nnz) or None
+    """
+    seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
+    indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+    max_seqlen_in_batch = int(seqlens_in_batch.max().item())
+    cu_seqlens = torch.nn.functional.pad(torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32), (1, 0))
+
+    if inputs.dim() == 2:
+        unpadded_inputs = inputs.flatten()[indices]
+    else:
+        batch, seqlen, *rest = inputs.shape
+        shape = batch * seqlen
+        unpadded_inputs = inputs.view(shape, *rest)[indices]
+
+    unpadded_position_ids = position_ids.flatten()[indices] if position_ids is not None else None
+    unpadded_labels = labels.flatten()[indices] if labels is not None else None
+
+    return unpadded_inputs, indices, cu_seqlens, max_seqlen_in_batch, unpadded_position_ids, unpadded_labels
+
+
+def _pad_cm3p_output(
+    inputs: torch.Tensor,
+    indices: torch.Tensor,
+    batch: int,
+    seqlen: int,
+) -> torch.Tensor:
+    """
+    Add padding to sequences.
+
+    Args:
+        inputs: (total_nnz, ...) or (total_nnz,), where total_nnz = number of tokens selected in attention_mask.
+        indices: (total_nnz)
+        batch: int, batch size
+        seqlen: int, max sequence length
+
+    Returns:
+        padded_inputs: (batch, seqlen, ...) or (batch, seqlen)
+    """
+    if inputs.dim() == 1:
+        output = torch.zeros(batch * seqlen, dtype=inputs.dtype, device=inputs.device)
+        output[indices] = inputs
+        padded_inputs = output.view(batch, seqlen)
+    else:
+        _, *rest = inputs.shape
+        output = torch.zeros(batch * seqlen, *rest, dtype=inputs.dtype, device=inputs.device)
+        output[indices] = inputs
+        padded_inputs = output.view(batch, seqlen, *rest)
+
+    return padded_inputs
 
 
 @dataclass
@@ -191,8 +263,9 @@ class CM3PPreTrainedModel(PreTrainedModel):
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
             module.weight.data.fill_(1.0)
+            if module.bias is not None:
+                module.bias.data.zero_()
         elif isinstance(module, ModernBertModel):
             module.initialize_weights()
         elif isinstance(module, CM3PModel):
@@ -227,15 +300,42 @@ class CM3PMetadataTransformer(nn.Module):
         self.config = config
         self.encoder = ModernBertModel(config)
 
+    def get_input_embeddings(self):
+        return self.encoder.get_input_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.encoder.set_input_embeddings(value)
+
     @can_return_tuple
     @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_pooler: bool = True,
     ) -> BaseModelOutputWithPooling:
+        r"""
+        indices (`torch.Tensor` of shape `(total_unpadded_tokens,)`, *optional*):
+            Indices of the non-padding tokens in the input sequence. Used for unpadding the output.
+        cu_seqlens (`torch.Tensor` of shape `(batch + 1,)`, *optional*):
+            Cumulative sequence lengths of the input sequences. Used to index the unpadded tensors.
+        max_seqlen (`int`, *optional*):
+            Maximum sequence length in the batch excluding padding tokens. Used to unpad input_ids and pad output tensors.
+        batch_size (`int`, *optional*):
+            Batch size of the input sequences. Used to pad the output tensors.
+        seq_len (`int`, *optional*):
+            Sequence length of the input sequences including padding tokens. Used to pad the output tensors.
+        output_pooler (`bool`, *optional*, defaults to `True`):
+            Whether to return the pooled output of the model. The pooled output is usually the representation of
+            the first token (CLS) or the mean of the token representations.
+        """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -245,7 +345,7 @@ class CM3PMetadataTransformer(nn.Module):
             raise ValueError("You have to specify input_ids")
 
         is_3d = input_ids.dim() == 3
-        batch_size = input_ids.size(0)
+        batch_size_3d = input_ids.size(0)
         if is_3d:
             # flatten to 2D batch if multiple metadata variations are provided
             input_ids = input_ids.view(-1, input_ids.size(-1))
@@ -255,31 +355,41 @@ class CM3PMetadataTransformer(nn.Module):
         encoder_outputs: BaseModelOutput = self.encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
+
         last_hidden_state = encoder_outputs.last_hidden_state
+        pooled_output = None
 
         if is_3d:
             # un-flatten back to 3D batch (batch_size, variations, seq_length, hidden_size)
             last_hidden_state = last_hidden_state.view(
-                batch_size, -1, last_hidden_state.size(-2), last_hidden_state.size(-1)
+                batch_size_3d, -1, last_hidden_state.size(-2), last_hidden_state.size(-1)
             )
             if attention_mask is not None:
-                attention_mask = attention_mask.view(batch_size, -1, attention_mask.size(-1))
+                attention_mask = attention_mask.view(batch_size_3d, -1, attention_mask.size(-1))
 
-        if self.config.cls_embed:
-            pooled_output = last_hidden_state[..., 0, :]
-        elif attention_mask is not None:
-            # Use the attention mask to exclude padding tokens
-            expanded_attention_mask = attention_mask.unsqueeze(-1).float()
-            masked_hidden_states = last_hidden_state * expanded_attention_mask
-            sum_hidden_states = torch.sum(masked_hidden_states, dim=-2)
-            sum_attention_mask = torch.sum(expanded_attention_mask, dim=-2)
-            pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
-            pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
-        else:
-            pooled_output = torch.mean(last_hidden_state, dim=-2)
+        if output_pooler:
+            if indices is not None:
+                raise NotImplementedError("Pooling with unpadded input is not implemented yet.")
+            if self.config.cls_embed:
+                pooled_output = last_hidden_state[..., 0, :]
+            elif attention_mask is not None:
+                # Use the attention mask to exclude padding tokens
+                expanded_attention_mask = attention_mask.unsqueeze(-1).float()
+                masked_hidden_states = last_hidden_state * expanded_attention_mask
+                sum_hidden_states = torch.sum(masked_hidden_states, dim=-2)
+                sum_attention_mask = torch.sum(expanded_attention_mask, dim=-2)
+                pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
+                pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
+            else:
+                pooled_output = torch.mean(last_hidden_state, dim=-2)
 
         return BaseModelOutputWithPooling(
             last_hidden_state=last_hidden_state,
@@ -315,14 +425,41 @@ class CM3PMetadataModel(CM3PPreTrainedModel):
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_pooler: bool = True,
     ) -> BaseModelOutputWithPooling:
+        r"""
+        indices (`torch.Tensor` of shape `(total_unpadded_tokens,)`, *optional*):
+            Indices of the non-padding tokens in the input sequence. Used for unpadding the output.
+        cu_seqlens (`torch.Tensor` of shape `(batch + 1,)`, *optional*):
+            Cumulative sequence lengths of the input sequences. Used to index the unpadded tensors.
+        max_seqlen (`int`, *optional*):
+            Maximum sequence length in the batch excluding padding tokens. Used to unpad input_ids and pad output tensors.
+        batch_size (`int`, *optional*):
+            Batch size of the input sequences. Used to pad the output tensors.
+        seq_len (`int`, *optional*):
+            Sequence length of the input sequences including padding tokens. Used to pad the output tensors.
+        output_pooler (`bool`, *optional*, defaults to `True`):
+            Whether to return the pooled output of the model. The pooled output is usually the representation of
+            the first token (CLS) or the mean of the token representations.
+        """
         return self.metadata_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_pooler=output_pooler,
         )
 
 
@@ -393,6 +530,12 @@ class CM3PBeatmapTransformer(nn.Module):
         self.audio_encoder = CM3PAudioEncoder(config.audio_config)
         self.encoder = ModernBertModel(config)
 
+    def get_input_embeddings(self):
+        return self.encoder.get_input_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.encoder.set_input_embeddings(value)
+
     @can_return_tuple
     @auto_docstring
     def forward(
@@ -400,15 +543,39 @@ class CM3PBeatmapTransformer(nn.Module):
         input_ids: Optional[torch.LongTensor] = None,
         input_features: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
+        sliding_window_mask: Optional[torch.FloatTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_pooler: bool = True,
     ) -> CM3PBeatmapModelOutput:
         r"""
         input_features (`torch.FloatTensor` of shape `(batch_size, num_frames, num_mels)`, *optional*):
             The audio frames to be processed by the audio encoder. If provided, the model will use these frames to
             compute the beatmap embeddings.
+        sliding_window_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Mask to avoid performing attention on padding or far-away tokens. In ModernBert, only every few layers
+            perform global attention, while the rest perform local attention. This mask is used to avoid attending to
+            far-away tokens in the local attention layers when not using Flash Attention.
+        indices (`torch.Tensor` of shape `(total_unpadded_tokens,)`, *optional*):
+            Indices of the non-padding tokens in the input sequence. Used for unpadding the output.
+        cu_seqlens (`torch.Tensor` of shape `(batch + 1,)`, *optional*):
+            Cumulative sequence lengths of the input sequences. Used to index the unpadded tensors.
+        max_seqlen (`int`, *optional*):
+            Maximum sequence length in the batch excluding padding tokens. Used to unpad input_ids and pad output tensors.
+        batch_size (`int`, *optional*):
+            Batch size of the input sequences. Used to pad the output tensors.
+        seq_len (`int`, *optional*):
+            Sequence length of the input sequences including padding tokens. Used to pad the output tensors.
+        output_pooler (`bool`, *optional*, defaults to `True`):
+            Whether to return the pooled output of the model. The pooled output is usually the representation of
+            the first token (CLS) or the mean of the token representations.
         """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -416,7 +583,7 @@ class CM3PBeatmapTransformer(nn.Module):
         )
 
         if inputs_embeds is None:
-            inputs_embeds = self.encoder.embeddings.tok_embeddings(input_ids)
+            inputs_embeds = self.get_input_embeddings()(input_ids)
 
         audio_model_outputs = None
         if input_features is not None:
@@ -434,24 +601,35 @@ class CM3PBeatmapTransformer(nn.Module):
         encoder_outputs: BaseModelOutput = self.encoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
+            sliding_window_mask=sliding_window_mask,
             position_ids=position_ids,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
 
         last_hidden_state = encoder_outputs.last_hidden_state
-        if self.config.cls_embed:
-            pooled_output = last_hidden_state[:, 0]
-        elif attention_mask is not None:
-            # Use the attention mask to exclude padding tokens
-            expanded_attention_mask = attention_mask.unsqueeze(-1).float()
-            masked_hidden_states = last_hidden_state * expanded_attention_mask
-            sum_hidden_states = torch.sum(masked_hidden_states, dim=1)
-            sum_attention_mask = torch.sum(expanded_attention_mask, dim=1)
-            pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
-            pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
-        else:
-            pooled_output = torch.mean(last_hidden_state, dim=1)
+        pooled_output = None
+
+        if output_pooler:
+            if indices is not None:
+                raise NotImplementedError("Pooling with unpadded input is not implemented yet.")
+            if self.config.cls_embed:
+                pooled_output = last_hidden_state[:, 0]
+            elif attention_mask is not None:
+                # Use the attention mask to exclude padding tokens
+                expanded_attention_mask = attention_mask.unsqueeze(-1).float()
+                masked_hidden_states = last_hidden_state * expanded_attention_mask
+                sum_hidden_states = torch.sum(masked_hidden_states, dim=1)
+                sum_attention_mask = torch.sum(expanded_attention_mask, dim=1)
+                pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
+                pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
+            else:
+                pooled_output = torch.mean(last_hidden_state, dim=1)
 
         return CM3PBeatmapModelOutput(
             last_hidden_state=last_hidden_state,
@@ -492,13 +670,32 @@ class CM3PBeatmapModel(CM3PPreTrainedModel):
         attention_mask: Optional[torch.FloatTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_pooler: bool = True,
     ) -> CM3PBeatmapModelOutput:
         r"""
         input_features (`torch.FloatTensor` of shape `(batch_size, num_frames, num_mels)`, *optional*):
             The audio frames to be processed by the audio encoder. If provided, the model will use these frames to
             compute the beatmap embeddings.
+        indices (`torch.Tensor` of shape `(total_unpadded_tokens,)`, *optional*):
+            Indices of the non-padding tokens in the input sequence. Used for unpadding the output.
+        cu_seqlens (`torch.Tensor` of shape `(batch + 1,)`, *optional*):
+            Cumulative sequence lengths of the input sequences. Used to index the unpadded tensors.
+        max_seqlen (`int`, *optional*):
+            Maximum sequence length in the batch excluding padding tokens. Used to unpad input_ids and pad output tensors.
+        batch_size (`int`, *optional*):
+            Batch size of the input sequences. Used to pad the output tensors.
+        seq_len (`int`, *optional*):
+            Sequence length of the input sequences including padding tokens. Used to pad the output tensors.
+        output_pooler (`bool`, *optional*, defaults to `True`):
+            Whether to return the pooled output of the model. The pooled output is usually the representation of
+            the first token (CLS) or the mean of the token representations.
         """
 
         return self.beatmap_model(
@@ -507,8 +704,14 @@ class CM3PBeatmapModel(CM3PPreTrainedModel):
             attention_mask=attention_mask,
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_pooler=output_pooler,
         )
 
 
@@ -841,12 +1044,12 @@ class CM3PForBeatmapClassification(CM3PPreTrainedModel):
         super().__init__(config)
 
         self.num_labels = config.num_labels
-        beatmap_model = CM3PBeatmapModel._from_config(config.beatmap_config)
+        beatmap_model = CM3PBeatmapModel._from_config(config)
         self.beatmap_model = beatmap_model.beatmap_model
 
         # Classifier head
         self.classifier = (
-            nn.Linear(config.beatmap_config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
+            nn.Linear(config.hidden_size, config.num_labels) if config.num_labels > 0 else nn.Identity()
         )
 
         # Initialize weights and apply final processing
@@ -924,10 +1127,165 @@ class CM3PForBeatmapClassification(CM3PPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+
+class CM3PPredictionHead(nn.Module):
+    def __init__(self, config: CM3PBeatmapConfig):
+        super().__init__()
+        self.config = config
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size, config.classifier_bias)
+        self.act = ACT2FN[config.classifier_activation]
+        self.norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps, bias=config.norm_bias)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return self.norm(self.act(self.dense(hidden_states)))
+
+
+class CM3PForMaskedLM(CM3PPreTrainedModel):
+    config_class = CM3PBeatmapConfig
+    base_model_prefix = "beatmap_model"
+    _tied_weights_keys = ["decoder.weight"]
+
+    def __init__(self, config: CM3PBeatmapConfig):
+        super().__init__(config)
+        self.config = config
+        beatmap_model = CM3PBeatmapModel._from_config(config)
+        self.beatmap_model = beatmap_model.beatmap_model
+        self.head = CM3PPredictionHead(config)
+        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=config.decoder_bias)
+
+        self.sparse_prediction = self.config.sparse_prediction
+        self.sparse_pred_ignore_index = self.config.sparse_pred_ignore_index
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_output_embeddings(self):
+        return self.decoder
+
+    def set_output_embeddings(self, new_embeddings: nn.Linear):
+        self.decoder = new_embeddings
+
+    @torch.compile(dynamic=True)
+    def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.head(output))
+
+    @auto_docstring
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        input_features: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        sliding_window_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        **kwargs,
+    ) -> Union[tuple[torch.Tensor], MaskedLMOutput]:
+        r"""
+        input_features (`torch.FloatTensor` of shape `(batch_size, num_frames, num_mels)`, *optional*):
+            The audio frames to be processed by the audio encoder. If provided, the model will use these frames to
+            compute the beatmap embeddings.
+        sliding_window_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Mask to avoid performing attention on padding or far-away tokens. In ModernBert, only every few layers
+            perform global attention, while the rest perform local attention. This mask is used to avoid attending to
+            far-away tokens in the local attention layers when not using Flash Attention.
+        indices (`torch.Tensor` of shape `(total_unpadded_tokens,)`, *optional*):
+            Indices of the non-padding tokens in the input sequence. Used for unpadding the output.
+        cu_seqlens (`torch.Tensor` of shape `(batch + 1,)`, *optional*):
+            Cumulative sequence lengths of the input sequences. Used to index the unpadded tensors.
+        max_seqlen (`int`, *optional*):
+            Maximum sequence length in the batch excluding padding tokens. Used to unpad input_ids and pad output tensors.
+        batch_size (`int`, *optional*):
+            Batch size of the input sequences. Used to pad the output tensors.
+        seq_len (`int`, *optional*):
+            Sequence length of the input sequences including padding tokens. Used to pad the output tensors.
+        """
+        # noinspection PyProtectedMember
+        if self.config._attn_implementation == "flash_attention_2":
+            if indices is None and cu_seqlens is None and max_seqlen is None:
+                if batch_size is None and seq_len is None:
+                    if inputs_embeds is not None:
+                        batch_size, seq_len = inputs_embeds.shape[:2]
+                    else:
+                        batch_size, seq_len = input_ids.shape[:2]
+                device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+                if attention_mask is None:
+                    attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
+
+                if inputs_embeds is None:
+                    with torch.no_grad():
+                        input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_cm3p_input(
+                            inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+                        )
+                else:
+                    inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_cm3p_input(
+                        inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+                    )
+
+        outputs = self.beatmap_model(
+            input_ids=input_ids,
+            input_features=input_features,
+            attention_mask=attention_mask,
+            sliding_window_mask=sliding_window_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            output_pooler=False,
+        )
+        last_hidden_state = outputs.last_hidden_state
+
+        if self.sparse_prediction and labels is not None:
+            # flatten labels and output first
+            labels = labels.view(-1)
+            last_hidden_state = last_hidden_state.view(labels.shape[0], -1)
+
+            # then filter out the non-masked tokens
+            mask_tokens = labels != self.sparse_pred_ignore_index
+            last_hidden_state = last_hidden_state[mask_tokens]
+            labels = labels[mask_tokens]
+
+        logits = (
+            self.compiled_head(last_hidden_state)
+            if self.config.reference_compile
+            else self.decoder(self.head(last_hidden_state))
+        )
+
+        loss = None
+        if labels is not None:
+            loss = self.loss_function(logits, labels, vocab_size=self.config.vocab_size, **kwargs)
+
+        # noinspection PyProtectedMember
+        if self.config._attn_implementation == "flash_attention_2":
+            with nullcontext() if self.config.repad_logits_with_grad or labels is None else torch.no_grad():
+                logits = _pad_cm3p_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
+
+        return MaskedLMOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
 AutoModel.register(CM3PMetadataConfig, CM3PMetadataModel)
 AutoModel.register(CM3PBeatmapConfig, CM3PBeatmapModel)
 AutoModel.register(CM3PConfig, CM3PModel)
 AutoModelForSequenceClassification.register(CM3PBeatmapConfig, CM3PForBeatmapClassification)
+AutoModelForMaskedLM.register(CM3PBeatmapConfig, CM3PForMaskedLM)
 
 __all__ = [
     "CM3PModel",

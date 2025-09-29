@@ -1,6 +1,7 @@
 defaults:
   - /train/base@_here_
 
+model_cls: "CM3PModel"
 freeze_beatmap_model: false  # Whether to freeze the beatmap model during training
 freeze_metadata_model: false  # Whether to freeze the metadata model during training
 attn_implementation: "flash_attention_2"
@@ -139,6 +140,12 @@ dataset:                  # Data settings
   sampling_rate: ${..processor.audio_feature_extractor.sampling_rate}  # Audio sampling rate
   test_metadata_variations: 1000  # Number of metadata variations to generate during testing
   train_metadata_variations: 1  # Number of metadata variations to generate during training
+  labels: "none"
+  include_metadata: true  # Whether to include metadata in the dataset
+  include_audio: true  # Whether to include audio in the dataset
+  include_beatmap: true  # Whether to include beatmap in the dataset
+  masked_lm_prob: 0.25  # Probability of masking a token for masked LM training
+  masked_lm_split: [0.8, 0.1, 0.1]  # Split of masking types: [mask, random, original]
 
 hydra:
   job:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Callable
 
 import numpy as np
+import torch
 from pandas import Series, DataFrame
 from torch.utils.data import IterableDataset, get_worker_info
 from transformers.utils import PaddingStrategy
@@ -171,6 +172,16 @@ class BeatmapDatasetIterable:
         self.processor = processor
         self.test = test
 
+        if self.args.labels == "masked_lm":
+            # Precompute eligible random token IDs for masked LM replacement
+            exclude_token_ids = torch.tensor(self.processor.beatmap_tokenizer.convert_tokens_to_ids([
+                self.processor.beatmap_tokenizer.audio_token,
+            ]))
+            all_token_ids = torch.arange(self.processor.beatmap_tokenizer.vocab_size)
+            exclude_mask = torch.zeros_like(all_token_ids, dtype=torch.bool)
+            exclude_mask[exclude_token_ids] = True
+            self.eligible_random_token_ids = all_token_ids[~exclude_mask]
+
     def _get_speed_augment(self):
         if self.test or random.random() >= self.args.dt_augment_prob:
             return 1.0
@@ -180,6 +191,30 @@ class BeatmapDatasetIterable:
         if self.args.dt_augment_sqrt:
             base = np.power(base, 0.5)
         return mi + (ma - mi) * base
+
+    def _process_input_for_masked_lm(self, inputs):
+        input_ids = inputs.input_ids
+        to_predict_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        special_ids = self.processor.beatmap_tokenizer.all_special_ids
+        for sid in special_ids:
+            to_predict_mask &= input_ids != sid
+        to_predict_mask &= torch.rand(input_ids.shape) < self.args.masked_lm_prob
+        labels = input_ids.masked_fill(~to_predict_mask, -100)
+        inputs["labels"] = labels
+
+        # For each position to predict, mask the input ids with an 80% chance, replace with random token with 10% chance, or keep original with 10% chance
+        split_bounds = np.cumsum(self.args.masked_lm_split)
+        rand = torch.rand(input_ids.shape)
+        masking_mask = (rand < split_bounds[0]) & to_predict_mask
+        random_replacement_mask = (rand >= split_bounds[0]) & (rand < split_bounds[1]) & to_predict_mask
+
+        input_ids.masked_fill_(masking_mask, self.processor.beatmap_tokenizer.mask_token_id)
+
+        num_random_tokens = random_replacement_mask.sum().item()
+        if num_random_tokens > 0:
+            random_indices = torch.randint(0, self.eligible_random_token_ids.size(0), (num_random_tokens,))
+            random_token_ids = self.eligible_random_token_ids[random_indices]
+            input_ids[random_replacement_mask] = random_token_ids
 
     def __iter__(self):
         return self._get_next_tracks()
@@ -202,33 +237,38 @@ class BeatmapDatasetIterable:
         audio_path = track_path / beatmap_metadata["AudioFile"]
         beatmap_path = track_path / beatmap_metadata["BeatmapFile"]
 
-        try:
-            if audio_path in audio_cache:
-                audio_samples = audio_cache[audio_path]
-            else:
-                logger.info(f"Loading audio file: {audio_path}")
-                audio_samples = load_audio_file(audio_path, self.args.sampling_rate, speed)
-                audio_cache[audio_path] = audio_samples
-                logger.info(f"Audio length: {len(audio_samples) / self.args.sampling_rate:.2f} seconds")
-        except Exception as e:
-            logger.warning(f"Failed to load audio file: {audio_path}")
-            logger.warning(e)
-            return
+        audio_samples = None
+        if self.args.include_audio:
+            try:
+                if audio_path in audio_cache:
+                    audio_samples = audio_cache[audio_path]
+                else:
+                    logger.info(f"Loading audio file: {audio_path}")
+                    audio_samples = load_audio_file(audio_path, self.args.sampling_rate, speed)
+                    audio_cache[audio_path] = audio_samples
+                    logger.info(f"Audio length: {len(audio_samples) / self.args.sampling_rate:.2f} seconds")
+            except Exception as e:
+                logger.warning(f"Failed to load audio file: {audio_path}")
+                logger.warning(e)
+                return
 
         try:
             results = self.processor(
-                metadata=get_metadata(beatmap_metadata=beatmap_metadata, speed=speed),
-                beatmap=beatmap_path,
+                metadata=get_metadata(beatmap_metadata=beatmap_metadata, speed=speed) if self.args.include_metadata else None,
+                beatmap=beatmap_path if self.args.include_beatmap else None,
                 audio=audio_samples,
                 audio_sampling_rate=self.args.sampling_rate,
                 speed=speed,
-                multiply_metadata=True,
-                populate_metadata=True,
+                multiply_metadata=self.args.include_metadata,
+                populate_metadata=self.args.include_metadata,
                 metadata_dropout_prob=self.args.metadata_dropout_prob if not self.test else 0.0,
                 metadata_variations=self.args.test_metadata_variations if self.test else self.args.train_metadata_variations,
                 padding=PaddingStrategy.MAX_LENGTH,
                 return_tensors="pt",
             )
+
+            if self.args.labels == "masked_lm":
+                self._process_input_for_masked_lm(results)
         except Exception as e:
             logger.warning(f"Failed to process beatmap: {beatmap_path}")
             logger.warning(e)

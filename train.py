@@ -12,6 +12,7 @@ from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers.trainer_utils import get_last_checkpoint, set_seed
 
 from cm3p import CM3PModel, CM3PConfig
+from cm3p.modeling_cm3p import CM3PForMaskedLM
 from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
@@ -28,6 +29,7 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
 
     # Variation classes: -1 padding, 0 original, 1 year, 2 status, 3 tags, 4 mapper
     variation_classes = {
+        -100: "masked_lm",
         -1: "padding",
         0: "original",
         1: "year",
@@ -36,51 +38,18 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
         4: "mapper",
     }
     classes_range = range(1, 5)
-    classes_with_top5 = [3, 4]
+    classes_with_top5 = [-100, 3, 4]
 
-    # eval_pred.inputs["metadata_variation_classes"] (batch_size, num_variations)
-    # eval_pred.predictions[0]: logits_per_beatmap (batch_size, batch_size, num_variations)
-
-    # For each variation class, compute accuracy:
-    # For each example: Separate out the classes of metadata variations
-    # For each class group: Check if the highest logit corresponds to the original metadata (class 0)
-    # Compute accuracy for all classes and top-5 accuracy for tags and mappers
-
-    if "metadata_variation_classes" not in eval_pred.inputs:
-        return None
-
-    logits_per_beatmap: torch.FloatTensor = eval_pred.predictions[0]
-    metadata_variation_classes: torch.LongTensor = eval_pred.inputs["metadata_variation_classes"]
-    batch_size = logits_per_beatmap.shape[0]
-
-    for var_class in classes_range:  # Skip padding class -1
-        correct = 0
-        total = 0
-        top5_correct = 0
-
-        for i in range(batch_size):
-            # Get indices of examples with the same variation class
-            class_mask: torch.BoolTensor = ((metadata_variation_classes[i] == var_class) |
-                                            (metadata_variation_classes[i] == 0))  # Include original class 0
-
-            if class_mask.sum() <= 1:  # Skip if there is only one example (no variation)
-                continue
-
-            # Get logits for this group
-            group_logits = logits_per_beatmap[i, i][class_mask]
-            group_classes = metadata_variation_classes[i][class_mask]
-
-            # Check if the highest logit corresponds to the original metadata (class 0)
-            total += 1
-
-            predicted_index = torch.argmax(group_logits).item()
-            if group_classes[predicted_index] == 0:
-                correct += 1
-
-            if var_class in classes_with_top5:
-                top5_indices = torch.topk(group_logits, k=min(5, group_logits.size(0))).indices
-                if (group_classes[top5_indices] == 0).any():
-                    top5_correct += 1
+    if eval_pred.label_ids is not None:
+        # Calculate accuracy for masked LM if labels are provided
+        var_class = -100
+        logits: torch.FloatTensor = eval_pred.predictions
+        labels: torch.LongTensor = eval_pred.label_ids
+        mask = labels != -100
+        correct = (logits.argmax(-1)[mask] == labels[mask]).sum().item()
+        total = mask.sum().item()
+        top5_indices = torch.topk(logits, k=min(5, logits.size(-1)), dim=-1).indices
+        top5_correct = (top5_indices[mask] == labels[mask].unsqueeze(-1)).any(dim=-1).sum().item()
 
         if var_class not in accumulated_metrics:
             accumulated_metrics[var_class] = {"correct": 0, "total": 0, "top5_correct": 0}
@@ -88,6 +57,55 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
         accumulated_metrics[var_class]["correct"] += correct
         accumulated_metrics[var_class]["total"] += total
         accumulated_metrics[var_class]["top5_correct"] += top5_correct
+
+    if "metadata_variation_classes" in eval_pred.inputs:
+        # eval_pred.inputs["metadata_variation_classes"] (batch_size, num_variations)
+        # eval_pred.predictions[0]: logits_per_beatmap (batch_size, batch_size, num_variations)
+
+        # For each variation class, compute accuracy:
+        # For each example: Separate out the classes of metadata variations
+        # For each class group: Check if the highest logit corresponds to the original metadata (class 0)
+        # Compute accuracy for all classes and top-5 accuracy for tags and mappers
+
+        logits_per_beatmap: torch.FloatTensor = eval_pred.predictions[0]
+        metadata_variation_classes: torch.LongTensor = eval_pred.inputs["metadata_variation_classes"]
+        batch_size = logits_per_beatmap.shape[0]
+
+        for var_class in classes_range:  # Skip padding class -1
+            correct = 0
+            total = 0
+            top5_correct = 0
+
+            for i in range(batch_size):
+                # Get indices of examples with the same variation class
+                class_mask: torch.BoolTensor = ((metadata_variation_classes[i] == var_class) |
+                                                (metadata_variation_classes[i] == 0))  # Include original class 0
+
+                if class_mask.sum() <= 1:  # Skip if there is only one example (no variation)
+                    continue
+
+                # Get logits for this group
+                group_logits = logits_per_beatmap[i, i][class_mask]
+                group_classes = metadata_variation_classes[i][class_mask]
+
+                # Check if the highest logit corresponds to the original metadata (class 0)
+                total += 1
+
+                predicted_index = torch.argmax(group_logits).item()
+                if group_classes[predicted_index] == 0:
+                    correct += 1
+
+                if var_class in classes_with_top5:
+                    top5_indices = torch.topk(group_logits, k=min(5, group_logits.size(0))).indices
+                    if (group_classes[top5_indices] == 0).any():
+                        top5_correct += 1
+
+            if var_class not in accumulated_metrics:
+                accumulated_metrics[var_class] = {"correct": 0, "total": 0, "top5_correct": 0}
+
+            accumulated_metrics[var_class]["correct"] += correct
+            accumulated_metrics[var_class]["total"] += total
+            accumulated_metrics[var_class]["top5_correct"] += top5_correct
 
     if not compute_result:
         return None
@@ -243,11 +261,17 @@ def main(args: TrainConfig):
     assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "bos_token")
     assign_token_id(model_config.metadata_config, processor.metadata_tokenizer, "eos_token")
 
+    if args.model_cls == "CM3PForMaskedLM":
+        model_class = CM3PForMaskedLM
+        model_config = model_config.beatmap_config
+    else:
+        model_class = CM3PModel
+
     if not training_args.do_train and checkpoint is not None:
         logger.warning(f"Loading model from checkpoint {checkpoint} for evaluation")
-        model = CM3PModel.from_pretrained(checkpoint, config=model_config)
+        model = model_class.from_pretrained(checkpoint, config=model_config)
     else:
-        model = CM3PModel(model_config)
+        model = model_class(model_config)
 
     def _freeze_params(module):
         for param in module.parameters():

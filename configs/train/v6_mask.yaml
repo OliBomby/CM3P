@@ -1,0 +1,42 @@
+defaults:
+  - default
+  - ../model@model: v1
+  - _self_
+
+model_cls: "CM3PForMaskedLM"
+
+training:
+  learning_rate: 4e-4
+  optim: "muon"
+
+processor:
+  beatmap_parser:
+    add_snapping: false
+    add_distances: false
+
+  beatmap_tokenizer:
+    position_split_axes: true
+    add_cls_token: true
+    separate_new_combo_token: false
+
+  metadata_tokenizer:
+    min_year: 2007
+    add_cls_token: true
+
+  default_kwargs:
+      beatmap_kwargs:
+        max_length: 2000
+
+model:
+    metadata_config:
+        cls_embed: true
+
+    beatmap_config:
+        cls_embed: true
+
+dataset:
+  cycle_length: 1
+  min_year: 2007
+  train_metadata_variations: 256
+  labels: "masked_lm"
+  include_metadata: false

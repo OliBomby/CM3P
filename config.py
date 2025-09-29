@@ -96,10 +96,17 @@ class DataSetConfig:
     sampling_rate: int
     test_metadata_variations: int
     train_metadata_variations: int
+    labels: str
+    include_metadata: bool
+    include_audio: bool
+    include_beatmap: bool
+    masked_lm_prob: float
+    masked_lm_split: list[float]
 
 
 @dataclass
 class TrainConfig:
+    model_cls: str
     freeze_beatmap_model: bool
     freeze_metadata_model: bool
     attn_implementation: str

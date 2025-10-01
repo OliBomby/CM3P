@@ -116,6 +116,8 @@ class TrainConfig:
     dataset: DataSetConfig
     model: dict
 
+    from_pretrained: Optional[str] = None
+
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
     wandb_mode: Optional[str] = None

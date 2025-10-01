@@ -270,6 +270,9 @@ def main(args: TrainConfig):
     if not training_args.do_train and checkpoint is not None:
         logger.warning(f"Loading model from checkpoint {checkpoint} for evaluation")
         model = model_class.from_pretrained(checkpoint, config=model_config)
+    elif args.from_pretrained is not None:
+        logger.warning(f"Loading model from {args.from_pretrained}")
+        model = model_class.from_pretrained(args.from_pretrained, config=model_config)
     else:
         model = model_class(model_config)
 

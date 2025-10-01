@@ -40,7 +40,7 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
     classes_range = range(1, 5)
     classes_with_top5 = [-100, 3, 4]
 
-    if eval_pred.label_ids is not None:
+    if eval_pred.label_ids is not None and len(eval_pred.label_ids) > 0:
         # Calculate accuracy for masked LM if labels are provided
         var_class = -100
         logits: torch.FloatTensor = eval_pred.predictions

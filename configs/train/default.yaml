@@ -4,6 +4,7 @@ defaults:
 model_cls: "CM3PModel"
 freeze_beatmap_model: false  # Whether to freeze the beatmap model during training
 freeze_metadata_model: false  # Whether to freeze the metadata model during training
+unfreeze_beatmap_model_at_step: null  # Step at which to unfreeze the beatmap model, if previously frozen
 attn_implementation: "flash_attention_2"
 
 from_pretrained: null  # Path to a pretrained model to load weights from

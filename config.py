@@ -109,6 +109,7 @@ class TrainConfig:
     model_cls: str
     freeze_beatmap_model: bool
     freeze_metadata_model: bool
+    unfreeze_beatmap_model_at_step: Optional[int]
     attn_implementation: str
 
     training: dict

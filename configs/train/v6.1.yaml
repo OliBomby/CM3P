@@ -1,0 +1,37 @@
+defaults:
+  - default
+  - ../model@model: v1
+  - _self_
+
+from_pretrained: "../../../saved_logs/train_v6_mask/trainer_output/checkpoint-30000"
+freeze_beatmap_model: true
+unfreeze_beatmap_model_at_step: 5000
+
+training:
+  learning_rate: 1e-4
+  optim: "muon"
+
+processor:
+  beatmap_parser:
+    add_snapping: false
+    add_distances: false
+
+  beatmap_tokenizer:
+    position_split_axes: true
+    add_cls_token: true
+    separate_new_combo_token: false
+
+  metadata_tokenizer:
+    min_year: 2007
+    add_cls_token: true
+
+model:
+    metadata_config:
+        cls_embed: false
+
+    beatmap_config:
+        cls_embed: false
+
+dataset:
+  min_year: 2007
+  train_metadata_variations: 256

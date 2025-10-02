@@ -7,7 +7,7 @@ from pathlib import Path
 import hydra
 import torch
 from omegaconf import OmegaConf
-from transformers import Trainer, EvalPrediction
+from transformers import Trainer, EvalPrediction, TrainerCallback
 from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers.trainer_utils import get_last_checkpoint, set_seed
 
@@ -22,6 +22,17 @@ from mmrs_dataset import MmrsDataset
 
 logger = logging.getLogger(__name__)
 accumulated_metrics = {}
+
+
+class UnfreezeBeatmapCallback(TrainerCallback):
+    def __init__(self, unfreeze_at_step=1000):
+        self.unfreeze_at_step = unfreeze_at_step
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step == self.unfreeze_at_step:
+            logger.info(f"Unfreezing beatmap_model at step {state.global_step}")
+            for param in kwargs["model"].beatmap_model.parameters():
+                param.requires_grad = True
 
 
 def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
@@ -317,6 +328,11 @@ def main(args: TrainConfig):
             adamw_eps=training_args.adam_epsilon,
         ), optimizers[1])
 
+    # Configure custom callbacks if needed
+    callbacks = []
+    if args.freeze_beatmap_model and args.unfreeze_beatmap_model_at_step is not None:
+        callbacks.append(UnfreezeBeatmapCallback(unfreeze_at_step=args.unfreeze_beatmap_model_at_step))
+
     # Initialize our trainer
     trainer = Trainer(
         model=model,
@@ -328,6 +344,7 @@ def main(args: TrainConfig):
         preprocess_logits_for_metrics=None,
         optimizers=optimizers,
         processing_class=processor,
+        callbacks=callbacks,
     )
 
     # Training

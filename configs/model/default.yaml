@@ -3,6 +3,7 @@ projection_dim: 512
 logit_scale_init_value: 2.6592
 initializer_factor: 1.0
 initializer_range: 0.02
+loss_type: null
 
 metadata_config:
   cls_embed: false

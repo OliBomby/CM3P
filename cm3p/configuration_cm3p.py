@@ -290,6 +290,7 @@ class CM3PConfig(PretrainedConfig):
         logit_scale_init_value=2.6592,
         initializer_factor=1.0,
         initializer_range=0.02,
+        loss_type=None,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -309,6 +310,7 @@ class CM3PConfig(PretrainedConfig):
         self.logit_scale_init_value = logit_scale_init_value
         self.initializer_factor = initializer_factor
         self.initializer_range = initializer_range
+        self.loss_type = loss_type
 
 
 AutoConfig.register("cm3p_metadata_model", CM3PMetadataConfig)

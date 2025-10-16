@@ -226,6 +226,8 @@ class CM3POutput(ModelOutput):
         The metadata embeddings obtained by applying the projection layer to the pooled output of [`CM3PMetadataModel`].
     beatmap_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim`):
         The beatmap embeddings obtained by applying the projection layer to the pooled output of [`CM3PBeatmapModel`].
+    logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, vocab_size)`, *optional*, returned when `labels` is provided):
+        Prediction scores of the masked language modeling head. Only computed if `labels` is provided.
     metadata_model_output (`BaseModelOutputWithPooling`):
         The output of the [`CM3PMetadataModel`].
     beatmap_model_output (`BaseModelOutputWithPooling`):
@@ -237,6 +239,7 @@ class CM3POutput(ModelOutput):
     logits_per_metadata: Optional[torch.FloatTensor] = None
     metadata_embeds: Optional[torch.FloatTensor] = None
     beatmap_embeds: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
     metadata_model_output: BaseModelOutputWithPooling = None
     beatmap_model_output: BaseModelOutputWithPooling = None
 
@@ -617,19 +620,23 @@ class CM3PBeatmapTransformer(nn.Module):
 
         if output_pooler:
             if indices is not None:
-                raise NotImplementedError("Pooling with unpadded input is not implemented yet.")
-            if self.config.cls_embed:
-                pooled_output = last_hidden_state[:, 0]
-            elif attention_mask is not None:
-                # Use the attention mask to exclude padding tokens
-                expanded_attention_mask = attention_mask.unsqueeze(-1).float()
-                masked_hidden_states = last_hidden_state * expanded_attention_mask
-                sum_hidden_states = torch.sum(masked_hidden_states, dim=1)
-                sum_attention_mask = torch.sum(expanded_attention_mask, dim=1)
-                pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
-                pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
+                if self.config.cls_embed:
+                    pooled_output = last_hidden_state[cu_seqlens[:-1]]
+                else:
+                    raise NotImplementedError("Pooling with unpadded input is not implemented yet.")
             else:
-                pooled_output = torch.mean(last_hidden_state, dim=1)
+                if self.config.cls_embed:
+                    pooled_output = last_hidden_state[:, 0]
+                elif attention_mask is not None:
+                    # Use the attention mask to exclude padding tokens
+                    expanded_attention_mask = attention_mask.unsqueeze(-1).float()
+                    masked_hidden_states = last_hidden_state * expanded_attention_mask
+                    sum_hidden_states = torch.sum(masked_hidden_states, dim=1)
+                    sum_attention_mask = torch.sum(expanded_attention_mask, dim=1)
+                    pooled_output = sum_hidden_states / torch.clamp(sum_attention_mask, min=1e-9)
+                    pooled_output = pooled_output.to(dtype=last_hidden_state.dtype)
+                else:
+                    pooled_output = torch.mean(last_hidden_state, dim=1)
 
         return CM3PBeatmapModelOutput(
             last_hidden_state=last_hidden_state,
@@ -740,6 +747,7 @@ class CM3PModel(CM3PPreTrainedModel):
         self.projection_dim = config.projection_dim
         self.metadata_embed_dim = metadata_config.hidden_size
         self.beatmap_embed_dim = beatmap_config.hidden_size
+        self.loss_type = config.loss_type
 
         metadata_model = CM3PMetadataModel._from_config(metadata_config)
         self.metadata_model = metadata_model.metadata_model
@@ -750,6 +758,9 @@ class CM3PModel(CM3PPreTrainedModel):
         self.beatmap_projection = nn.Linear(self.beatmap_embed_dim, self.projection_dim, bias=False)
         self.metadata_projection = nn.Linear(self.metadata_embed_dim, self.projection_dim, bias=False)
         self.logit_scale = nn.Parameter(torch.tensor(self.config.logit_scale_init_value))
+
+        self.head = CM3PPredictionHead(beatmap_config)
+        self.decoder = nn.Linear(beatmap_config.hidden_size, beatmap_config.vocab_size, bias=beatmap_config.decoder_bias)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -825,6 +836,10 @@ class CM3PModel(CM3PPreTrainedModel):
 
         return beatmap_features
 
+    @torch.compile(dynamic=True)
+    def compiled_head(self, output: torch.Tensor) -> torch.Tensor:
+        return self.decoder(self.head(output))
+
     @can_return_tuple
     @auto_docstring
     def forward(
@@ -837,9 +852,16 @@ class CM3PModel(CM3PPreTrainedModel):
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         metadata_variation_classes: Optional[torch.LongTensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        indices: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        seq_len: Optional[int] = None,
         return_loss: Optional[bool] = True,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        **kwargs,
     ) -> CM3POutput:
         r"""
         input_features (`torch.FloatTensor` of shape `(batch_size, num_frames, num_mels)`, *optional*):
@@ -852,6 +874,16 @@ class CM3PModel(CM3PPreTrainedModel):
         metadata_variation_classes (`torch.LongTensor` of shape `(batch_size, variations)`, *optional*):
             Tells the model what kind of variation each metadata sequence is.
             0 indicates the original metadata, -1 indicates paddidng, and any positive integer indicates a specific variation class.
+        indices (`torch.Tensor` of shape `(total_unpadded_tokens,)`, *optional*):
+            Indices of the non-padding tokens in the input sequence. Used for unpadding the output.
+        cu_seqlens (`torch.Tensor` of shape `(batch + 1,)`, *optional*):
+            Cumulative sequence lengths of the input sequences. Used to index the unpadded tensors.
+        max_seqlen (`int`, *optional*):
+            Maximum sequence length in the batch excluding padding tokens. Used to unpad input_ids and pad output tensors.
+        batch_size (`int`, *optional*):
+            Batch size of the input sequences. Used to pad the output tensors.
+        seq_len (`int`, *optional*):
+            Sequence length of the input sequences including padding tokens. Used to pad the output tensors.
         return_loss (`bool`, *optional*):
             Whether to return the contrastive loss.
         """
@@ -864,12 +896,40 @@ class CM3PModel(CM3PPreTrainedModel):
         if metadata_ids.dim() == 3 and return_loss and metadata_variation_classes is None:
             raise ValueError("When providing multiple metadata variations, metadata_variation_classes must be provided in order to compute loss correctly.")
 
+        # noinspection PyProtectedMember
+        if self.config._attn_implementation == "flash_attention_2":
+            if indices is None and cu_seqlens is None and max_seqlen is None:
+                if batch_size is None and seq_len is None:
+                    if inputs_embeds is not None:
+                        batch_size, seq_len = inputs_embeds.shape[:2]
+                    else:
+                        batch_size, seq_len = input_ids.shape[:2]
+                device = input_ids.device if input_ids is not None else inputs_embeds.device
+
+                if attention_mask is None:
+                    attention_mask = torch.ones((batch_size, seq_len), device=device, dtype=torch.bool)
+
+                if inputs_embeds is None:
+                    with torch.no_grad():
+                        input_ids, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_cm3p_input(
+                            inputs=input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+                        )
+                else:
+                    inputs_embeds, indices, cu_seqlens, max_seqlen, position_ids, labels = _unpad_cm3p_input(
+                        inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=labels
+                    )
+
         beatmap_outputs: BaseModelOutputWithPooling = self.beatmap_model(
             input_ids=input_ids,
             input_features=input_features,
             attention_mask=attention_mask,
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
+            indices=indices,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+            batch_size=batch_size,
+            seq_len=seq_len,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
         )
@@ -904,12 +964,28 @@ class CM3PModel(CM3PPreTrainedModel):
         if return_loss:
             loss = cm3p_loss(logits_per_metadata, metadata_variation_classes)
 
+        logits = (
+            self.compiled_head(beatmap_outputs.last_hidden_state)
+            if self.config.beatmap_config.reference_compile
+            else self.decoder(self.head(beatmap_outputs.last_hidden_state))
+        )
+
+        if labels is not None and return_loss:
+            mlm_loss = self.loss_function(logits, labels, vocab_size=self.config.beatmap_config.vocab_size, **kwargs)
+            loss += 0.5 * mlm_loss
+
+        # noinspection PyProtectedMember
+        if self.config._attn_implementation == "flash_attention_2":
+            with nullcontext() if self.config.beatmap_config.repad_logits_with_grad or labels is None else torch.no_grad():
+                logits = _pad_cm3p_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
+
         return CM3POutput(
             loss=loss,
             logits_per_beatmap=logits_per_beatmap,
             logits_per_metadata=logits_per_metadata,
             metadata_embeds=metadata_embeds,
             beatmap_embeds=beatmap_embeds,
+            logits=logits,
             metadata_model_output=metadata_outputs,
             beatmap_model_output=beatmap_outputs,
         )

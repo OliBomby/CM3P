@@ -54,7 +54,7 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
     if eval_pred.label_ids is not None and len(eval_pred.label_ids) > 0:
         # Calculate accuracy for masked LM if labels are provided
         var_class = -100
-        logits: torch.FloatTensor = eval_pred.predictions
+        logits: torch.FloatTensor = eval_pred.predictions[4] if isinstance(eval_pred.predictions, tuple) else eval_pred.predictions
         labels: torch.LongTensor = eval_pred.label_ids
         mask = labels != -100
         correct = (logits.argmax(-1)[mask] == labels[mask]).sum().item()

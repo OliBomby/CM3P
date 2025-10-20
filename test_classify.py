@@ -4,15 +4,15 @@ from cm3p import CM3PForBeatmapClassification
 from cm3p.processing_cm3p import CM3PProcessor
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-save_path = r"saved_logs/train_v7_classifier/trainer_output/checkpoint-10000"
+save_path = r"saved_logs/train_v7_classifier2/trainer_output/checkpoint-10000"
 
 processor = CM3PProcessor.from_pretrained(save_path)
 model = CM3PForBeatmapClassification.from_pretrained(save_path, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="sdpa")
 
 audio = r"resources/audio.mp3"
-# beatmap = r"resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"
+beatmap = r"resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"
 # audio = r"resources/audio2.mp3"
-beatmap = r"resources/POLKADOT STINGRAY - Otoshimae (moph) [Mindmaster's Extra].osu"
+# beatmap = r"resources/POLKADOT STINGRAY - Otoshimae (moph) [Mindmaster's Extra].osu"
 
 inputs = processor(beatmap=beatmap, audio=audio)
 inputs = inputs.to(device, dtype=torch.bfloat16)
@@ -21,7 +21,7 @@ with torch.no_grad():
     logits = model(**inputs).logits
     probs = logits.softmax(dim=-1).cpu()
 
-ranked_threshold = 0.6
+ranked_threshold = 0.4
 predicted_ranked_states = probs[:, 1] >= ranked_threshold
 
 if predicted_ranked_states.all():

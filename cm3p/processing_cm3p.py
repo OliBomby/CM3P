@@ -506,7 +506,7 @@ class CM3PProcessor(ProcessorMixin):
 
                 # Loop through with sliding window
                 groups_search_index = 0
-                min_window_length_sec = 1
+                min_window_length_sec = 8
                 for start_sec in np.arange(0, song_length - min_window_length_sec, window_stride_sec):
                     end_sec = start_sec + window_length_sec
 

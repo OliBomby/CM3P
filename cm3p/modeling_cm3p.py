@@ -293,7 +293,7 @@ class CM3PPreTrainedModel(PreTrainedModel):
         elif isinstance(module, CM3PForBeatmapClassification):
             nn.init.normal_(
                 module.classifier.weight,
-                std=self.config.beatmap_config.hidden_size**-0.5 * self.config.initializer_factor,
+                std=self.config.hidden_size**-0.5 * self.config.initializer_factor,
             )
 
 

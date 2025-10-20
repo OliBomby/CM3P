@@ -12,7 +12,7 @@ from transformers import TrainingArguments, WhisperFeatureExtractor
 from transformers.trainer_utils import get_last_checkpoint, set_seed
 
 from cm3p import CM3PModel, CM3PConfig
-from cm3p.modeling_cm3p import CM3PForMaskedLM
+from cm3p.modeling_cm3p import CM3PForMaskedLM, CM3PForBeatmapClassification
 from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
@@ -40,6 +40,7 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
 
     # Variation classes: -1 padding, 0 original, 1 year, 2 status, 3 tags, 4 mapper
     variation_classes = {
+        -200: "classification",
         -100: "masked_lm",
         -1: "padding",
         0: "original",
@@ -52,22 +53,41 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
     classes_with_top5 = [-100, 3, 4]
 
     if eval_pred.label_ids is not None and len(eval_pred.label_ids) > 0:
-        # Calculate accuracy for masked LM if labels are provided
-        var_class = -100
-        logits: torch.FloatTensor = eval_pred.predictions[4] if isinstance(eval_pred.predictions, tuple) else eval_pred.predictions
-        labels: torch.LongTensor = eval_pred.label_ids
-        mask = labels != -100
-        correct = (logits.argmax(-1)[mask] == labels[mask]).sum().item()
-        total = mask.sum().item()
-        top5_indices = torch.topk(logits, k=min(5, logits.size(-1)), dim=-1).indices
-        top5_correct = (top5_indices[mask] == labels[mask].unsqueeze(-1)).any(dim=-1).sum().item()
+        if eval_pred.label_ids.ndim == 1:
+            # Classification task
+            logits: torch.FloatTensor = eval_pred.predictions if isinstance(eval_pred.predictions, torch.Tensor) else torch.tensor(eval_pred.predictions)
+            labels: torch.LongTensor = eval_pred.label_ids if isinstance(eval_pred.label_ids, torch.Tensor) else torch.tensor(eval_pred.label_ids)
+            predictions = logits.argmax(-1)
 
-        if var_class not in accumulated_metrics:
-            accumulated_metrics[var_class] = {"correct": 0, "total": 0, "top5_correct": 0}
+            var_class = -200
+            correct = (predictions == labels).sum().item()
+            total = labels.size(0)
+            top5_indices = torch.topk(logits, k=min(5, logits.size(-1)), dim=-1).indices
+            top5_correct = (top5_indices == labels.unsqueeze(-1)).any(dim=-1).sum().item()
 
-        accumulated_metrics[var_class]["correct"] += correct
-        accumulated_metrics[var_class]["total"] += total
-        accumulated_metrics[var_class]["top5_correct"] += top5_correct
+            if var_class not in accumulated_metrics:
+                accumulated_metrics[var_class] = {"correct": 0, "total": 0, "top5_correct": 0}
+
+            accumulated_metrics[var_class]["correct"] += correct
+            accumulated_metrics[var_class]["total"] += total
+            accumulated_metrics[var_class]["top5_correct"] += top5_correct
+        else:
+            # Calculate accuracy for masked LM if labels are provided
+            var_class = -100
+            logits: torch.FloatTensor = eval_pred.predictions[4] if isinstance(eval_pred.predictions, tuple) else eval_pred.predictions
+            labels: torch.LongTensor = eval_pred.label_ids
+            mask = labels != -100
+            correct = (logits.argmax(-1)[mask] == labels[mask]).sum().item()
+            total = mask.sum().item()
+            top5_indices = torch.topk(logits, k=min(5, logits.size(-1)), dim=-1).indices
+            top5_correct = (top5_indices[mask] == labels[mask].unsqueeze(-1)).any(dim=-1).sum().item()
+
+            if var_class not in accumulated_metrics:
+                accumulated_metrics[var_class] = {"correct": 0, "total": 0, "top5_correct": 0}
+
+            accumulated_metrics[var_class]["correct"] += correct
+            accumulated_metrics[var_class]["total"] += total
+            accumulated_metrics[var_class]["top5_correct"] += top5_correct
 
     if "metadata_variation_classes" in eval_pred.inputs:
         # eval_pred.inputs["metadata_variation_classes"] (batch_size, num_variations)
@@ -274,6 +294,9 @@ def main(args: TrainConfig):
 
     if args.model_cls == "CM3PForMaskedLM":
         model_class = CM3PForMaskedLM
+        model_config = model_config.beatmap_config
+    elif args.model_cls == "CM3PForBeatmapClassification":
+        model_class = CM3PForBeatmapClassification
         model_config = model_config.beatmap_config
     else:
         model_class = CM3PModel

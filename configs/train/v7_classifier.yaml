@@ -1,0 +1,47 @@
+defaults:
+  - default
+  - ../model@model: v1
+  - _self_
+
+model_cls: "CM3PForBeatmapClassification"
+from_pretrained: "../../../saved_logs/train_v7/trainer_output/checkpoint-30000"
+
+training:
+  learning_rate: 1e-4
+  optim: "muon"
+  max_steps: 10000
+
+processor:
+  beatmap_parser:
+    add_snapping: false
+    add_distances: false
+
+  beatmap_tokenizer:
+    position_split_axes: true
+    add_cls_token: true
+    separate_new_combo_token: false
+
+  metadata_tokenizer:
+    min_year: 2007
+    add_cls_token: true
+
+  default_kwargs:
+    beatmap_kwargs:
+      max_length: 2000
+
+model:
+  metadata_config:
+    cls_embed: true
+
+  beatmap_config:
+    cls_embed: true
+    problem_type: "single_label_classification"
+    id2label:
+      "0": "Graveyard"
+      "1": "Ranked"
+
+dataset:
+  min_year: 2018
+  labels: "ranked_classification"
+  include_metadata: false
+  cycle_length: 1

@@ -230,13 +230,20 @@ class BeatmapDatasetIterable:
             track_path = Path(first_beatmap_metadata["Path"]) / "data" / first_beatmap_metadata["BeatmapSetFolder"]
 
             for i, beatmap_metadata in metadata.iterrows():
-                for sample in self._get_next_beatmap(track_path, beatmap_metadata, speed, audio_cache):
+                audio_path = track_path / beatmap_metadata["AudioFile"]
+                is_ranked = beatmap_metadata["Status"] == "ranked"
+
+                if random.random() < 0.5:
+                    # Replace with a random beatmap from the dataset to increase robustness
+                    beatmap_metadata = self.metadata.sample(n=1).iloc[0]
+                    is_ranked = False
+
+                beatmap_path = Path(beatmap_metadata["Path"]) / "data" / beatmap_metadata["BeatmapSetFolder"] / beatmap_metadata["BeatmapFile"]
+
+                for sample in self._get_next_beatmap(beatmap_path, audio_path, is_ranked, beatmap_metadata, speed, audio_cache):
                     yield sample
 
-    def _get_next_beatmap(self, track_path, beatmap_metadata: Series, speed: float, audio_cache: dict) -> dict:
-        audio_path = track_path / beatmap_metadata["AudioFile"]
-        beatmap_path = track_path / beatmap_metadata["BeatmapFile"]
-
+    def _get_next_beatmap(self, beatmap_path, audio_path, is_ranked, beatmap_metadata: Series, speed: float, audio_cache: dict) -> dict:
         audio_samples = None
         if self.args.include_audio:
             try:
@@ -269,6 +276,8 @@ class BeatmapDatasetIterable:
 
             if self.args.labels == "masked_lm":
                 self._process_input_for_masked_lm(results)
+            elif self.args.labels == "ranked_classification":
+                results["labels"] = torch.full((results['input_ids'].size(0),), is_ranked, dtype=torch.long)
         except Exception as e:
             logger.warning(f"Failed to process beatmap: {beatmap_path}")
             logger.warning(e)

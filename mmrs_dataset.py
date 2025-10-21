@@ -231,19 +231,18 @@ class BeatmapDatasetIterable:
 
             for i, beatmap_metadata in metadata.iterrows():
                 audio_path = track_path / beatmap_metadata["AudioFile"]
-                is_ranked = beatmap_metadata["Status"] == "ranked"
+                beatmap_is_matched = True
 
-                if random.random() < 0.5:
-                    # Replace with a random beatmap from the dataset to increase robustness
+                if random.random() < self.args.beatmap_mismatch_prob:
                     beatmap_metadata = self.metadata.sample(n=1).iloc[0]
-                    is_ranked = False
+                    beatmap_is_matched = False
 
-                beatmap_path = Path(beatmap_metadata["Path"]) / "data" / beatmap_metadata["BeatmapSetFolder"] / beatmap_metadata["BeatmapFile"]
-
-                for sample in self._get_next_beatmap(beatmap_path, audio_path, is_ranked, beatmap_metadata, speed, audio_cache):
+                for sample in self._get_next_beatmap(audio_path, beatmap_metadata, speed, audio_cache, beatmap_is_matched):
                     yield sample
 
-    def _get_next_beatmap(self, beatmap_path, audio_path, is_ranked, beatmap_metadata: Series, speed: float, audio_cache: dict) -> dict:
+    def _get_next_beatmap(self, audio_path, beatmap_metadata: Series, speed: float, audio_cache: dict, beatmap_is_matched: bool) -> dict:
+        beatmap_path = Path(beatmap_metadata["Path"]) / "data" / beatmap_metadata["BeatmapSetFolder"] / beatmap_metadata["BeatmapFile"]
+
         audio_samples = None
         if self.args.include_audio:
             try:
@@ -277,6 +276,7 @@ class BeatmapDatasetIterable:
             if self.args.labels == "masked_lm":
                 self._process_input_for_masked_lm(results)
             elif self.args.labels == "ranked_classification":
+                is_ranked = beatmap_metadata["Status"] == "ranked" and beatmap_is_matched
                 results["labels"] = torch.full((results['input_ids'].size(0),), is_ranked, dtype=torch.long)
         except Exception as e:
             logger.warning(f"Failed to process beatmap: {beatmap_path}")

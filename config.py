@@ -102,6 +102,7 @@ class DataSetConfig:
     include_beatmap: bool
     masked_lm_prob: float
     masked_lm_split: list[float]
+    beatmap_mismatch_prob: float
 
 
 @dataclass

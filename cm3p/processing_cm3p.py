@@ -151,6 +151,7 @@ class CM3PProcessorKwargs(CommonKwargs, CM3PBeatmapKwargs, CM3PTokenizerKwargs, 
             "truncation": TruncationStrategy.LONGEST_FIRST,
             "window_length_sec": 30.0,
             "window_stride_sec": 30.0,
+            "min_window_length_sec": 1.0,
         },
         "metadata_kwargs": {
             "max_length": 128,
@@ -433,6 +434,7 @@ class CM3PProcessor(ProcessorMixin):
 
         window_length_sec = beatmap_kwargs.pop("window_length_sec")
         window_stride_sec = beatmap_kwargs.pop("window_stride_sec")
+        min_window_length_sec = beatmap_kwargs.pop("min_window_length_sec", 1.0)
         max_length = beatmap_kwargs.get("max_length", 8000)
         metadata_max_length = metadata_kwargs.get("max_length", 128)
         sampling_rate = audio_kwargs["sampling_rate"]
@@ -506,7 +508,6 @@ class CM3PProcessor(ProcessorMixin):
 
                 # Loop through with sliding window
                 groups_search_index = 0
-                min_window_length_sec = 8
                 for start_sec in np.arange(0, song_length - min_window_length_sec, window_stride_sec):
                     end_sec = start_sec + window_length_sec
 

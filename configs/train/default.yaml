@@ -103,6 +103,7 @@ processor:
         truncation: 'longest_first'
         window_length_sec: 16.0
         window_stride_sec: 16.0
+        min_window_length_sec: 1.0
 
       metadata_kwargs:
         max_length: 128

@@ -14,9 +14,9 @@ from transformers import WhisperFeatureExtractor, AutoProcessor, BatchEncoding
 from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NAME, logging
 
-from cm3p import CM3PConfig
-from cm3p.parsing_cm3p import CM3PBeatmapParser, load_beatmap, get_song_length
-from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata, merge_metadata_dicts
+from .configuration_cm3p import CM3PConfig
+from .parsing_cm3p import CM3PBeatmapParser, load_beatmap, get_song_length
+from .tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer, CM3PMetadata, merge_metadata_dicts
 
 if is_torch_available():
     import torch

@@ -7,8 +7,8 @@ from transformers import PreTrainedTokenizer, BatchEncoding, AutoTokenizer
 from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import PaddingStrategy
 
-from cm3p import CM3PBeatmapConfig, CM3PMetadataConfig
-from cm3p.parsing_cm3p import Group, EventType, EVENT_TYPES_WITH_NEW_COMBO
+from .configuration_cm3p import CM3PBeatmapConfig, CM3PMetadataConfig
+from .parsing_cm3p import Group, EventType, EVENT_TYPES_WITH_NEW_COMBO
 
 
 class CM3PBeatmapTokenizer(PreTrainedTokenizer):

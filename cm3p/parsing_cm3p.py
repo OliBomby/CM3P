@@ -10,7 +10,7 @@ from slider import Beatmap, Circle, Slider, Spinner, HoldNote, TimingPoint
 from slider.curve import Linear, Catmull, Perfect, MultiBezier
 from transformers import FeatureExtractionMixin, AutoFeatureExtractor
 
-from cm3p import CM3PConfig
+from .configuration_cm3p import CM3PConfig
 
 
 class EventType(Enum):

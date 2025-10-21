@@ -8,7 +8,7 @@ logger = logging.get_logger(__name__)
 
 
 class CM3PMetadataConfig(PretrainedConfig):
-    model_type = "cm3p_metadata_model"
+    model_type = "CM3PMetadata"
     base_config_key = "metadata_config"
 
     def __init__(
@@ -91,7 +91,7 @@ class CM3PMetadataConfig(PretrainedConfig):
 
 
 class CM3PAudioConfig(PretrainedConfig):
-    model_type = "cm3p_audio_model"
+    model_type = "CM3PAudio"
     base_config_key = "audio_config"
 
     def __init__(
@@ -176,7 +176,7 @@ class CM3PAudioConfig(PretrainedConfig):
 
 
 class CM3PBeatmapConfig(PretrainedConfig):
-    model_type = "cm3p_beatmap_model"
+    model_type = "CM3PBeatmap"
     base_config_key = "beatmap_config"
     sub_configs = {"audio_config": CM3PAudioConfig}
 
@@ -279,7 +279,7 @@ class CM3PBeatmapConfig(PretrainedConfig):
 
 
 class CM3PConfig(PretrainedConfig):
-    model_type = "cm3p"
+    model_type = "CM3P"
     sub_configs = {"metadata_config": CM3PMetadataConfig, "beatmap_config": CM3PBeatmapConfig}
 
     def __init__(
@@ -313,9 +313,9 @@ class CM3PConfig(PretrainedConfig):
         self.loss_type = loss_type
 
 
-AutoConfig.register("cm3p_metadata_model", CM3PMetadataConfig)
-AutoConfig.register("cm3p_audio_model", CM3PAudioConfig)
-AutoConfig.register("cm3p_beatmap_model", CM3PBeatmapConfig)
-AutoConfig.register("cm3p", CM3PConfig)
+AutoConfig.register("CM3PMetadata", CM3PMetadataConfig)
+AutoConfig.register("CM3PAudio", CM3PAudioConfig)
+AutoConfig.register("CM3PBeatmap", CM3PBeatmapConfig)
+AutoConfig.register("CM3P", CM3PConfig)
 
 __all__ = ["CM3PConfig", "CM3PMetadataConfig", "CM3PAudioConfig", "CM3PBeatmapConfig"]

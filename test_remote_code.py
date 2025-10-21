@@ -1,26 +1,15 @@
 import torch
-
-from cm3p import CM3PForBeatmapClassification
-from cm3p.processing_cm3p import CM3PProcessor
+from transformers import AutoProcessor, AutoModelForSequenceClassification
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-# save_path = r"saved_logs/train_v7_classifier/trainer_output/checkpoint-10000"
-# ranked_threshold = 0.8
-save_path = r"saved_logs/train_v7_classifier2/trainer_output/checkpoint-10000"
-ranked_threshold = 0.4
+save_path = r"OliBomby/CM3P-ranked-classifier"
 
-processor = CM3PProcessor.from_pretrained(save_path)
-model = CM3PForBeatmapClassification.from_pretrained(save_path, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="sdpa")
+processor = AutoProcessor.from_pretrained(save_path, trust_remote_code=True, revision="main")
+model = AutoModelForSequenceClassification.from_pretrained(save_path, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="sdpa", trust_remote_code=True, revision="main")
 
-# audio = r"resources/audio.mp3"
-# beatmap = r"resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"
-# audio = r"resources/audio2.mp3"
-# beatmap = r"resources/POLKADOT STINGRAY - Otoshimae (moph) [Mindmaster's Extra].osu"
 audio = r"resources/audio3.mp3"
-# beatmap = r"resources/Mitsuki Nakae - ANTICLOCK TEA-PARTY.osu"
+# beatmap = input("Path to beatmap file: ")
 beatmap = r"C:\Users\Olivier\AppData\Local\osu!\Songs\beatmap-638965817922162241-ANTICLOCK TEA-PARTY\Mitsuki Nakae - ANTICLOCK TEA-PARTY (Mapperatorinator) [Mapperatorinator V30].osu"
-# beatmap = r"C:\Users\Olivier\AppData\Local\osu!\Songs\1848363 garnet feat F9 - hauynite\garnet feat. F9 - hauynite (Shurelia) [rumination].osu"
-
 
 inputs = processor(beatmap=beatmap, audio=audio)
 inputs = inputs.to(device, dtype=torch.bfloat16)
@@ -29,10 +18,11 @@ with torch.no_grad():
     logits = model(**inputs).logits
     probs = logits.softmax(dim=-1).cpu()
 
+ranked_threshold = 0.4
 predicted_ranked_states = probs[:, 1] >= ranked_threshold
 
 if predicted_ranked_states.all():
-    print("Congratulations! Your beatmap has been approved to the ranked section. Your code is: RANKERATORINATOR3000")
+    print("Congratulations! Your beatmap has been approved to the ranked section.")
 else:
     print("Unfortunately, your beatmap has some quality issues and could not be approved to the ranked section. Please focus on improving these sections:")
 

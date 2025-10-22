@@ -27,6 +27,7 @@ processor:
 
 model:
   loss_type: "ForMaskedLM"
+  has_decoder_head: true
 
   metadata_config:
     cls_embed: true

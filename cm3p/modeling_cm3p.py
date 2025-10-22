@@ -759,8 +759,9 @@ class CM3PModel(CM3PPreTrainedModel):
         self.metadata_projection = nn.Linear(self.metadata_embed_dim, self.projection_dim, bias=False)
         self.logit_scale = nn.Parameter(torch.tensor(self.config.logit_scale_init_value))
 
-        self.head = CM3PPredictionHead(beatmap_config)
-        self.decoder = nn.Linear(beatmap_config.hidden_size, beatmap_config.vocab_size, bias=beatmap_config.decoder_bias)
+        if config.has_decoder_head:
+            self.head = CM3PPredictionHead(beatmap_config)
+            self.decoder = nn.Linear(beatmap_config.hidden_size, beatmap_config.vocab_size, bias=beatmap_config.decoder_bias)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -861,6 +862,7 @@ class CM3PModel(CM3PPreTrainedModel):
         return_loss: Optional[bool] = True,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        output_logits: Optional[bool] = None,
         **kwargs,
     ) -> CM3POutput:
         r"""
@@ -886,15 +888,21 @@ class CM3PModel(CM3PPreTrainedModel):
             Sequence length of the input sequences including padding tokens. Used to pad the output tensors.
         return_loss (`bool`, *optional*):
             Whether to return the contrastive loss.
+        output_logits (`bool`, *optional*):
+            Whether to return the logits from the decoder head.
         """
         # Use CM3P model's config for some fields (if specified) instead of those of beatmap & metadata components.
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
+        output_logits = output_logits if output_logits is not None else self.config.has_decoder_head
 
         if metadata_ids.dim() == 3 and return_loss and metadata_variation_classes is None:
             raise ValueError("When providing multiple metadata variations, metadata_variation_classes must be provided in order to compute loss correctly.")
+
+        if output_logits and not self.config.has_decoder_head:
+            raise ValueError("Cannot return logits when the model is not configured with a decoder head.")
 
         # noinspection PyProtectedMember
         if self.config._attn_implementation == "flash_attention_2":
@@ -964,20 +972,22 @@ class CM3PModel(CM3PPreTrainedModel):
         if return_loss:
             loss = cm3p_loss(logits_per_metadata, metadata_variation_classes)
 
-        logits = (
-            self.compiled_head(beatmap_outputs.last_hidden_state)
-            if self.config.beatmap_config.reference_compile
-            else self.decoder(self.head(beatmap_outputs.last_hidden_state))
-        )
+        logits = None
+        if output_logits:
+            logits = (
+                self.compiled_head(beatmap_outputs.last_hidden_state)
+                if self.config.beatmap_config.reference_compile
+                else self.decoder(self.head(beatmap_outputs.last_hidden_state))
+            )
 
-        if labels is not None and return_loss:
-            mlm_loss = self.loss_function(logits, labels, vocab_size=self.config.beatmap_config.vocab_size, **kwargs)
-            loss += 0.5 * mlm_loss
+            if labels is not None and return_loss:
+                mlm_loss = self.loss_function(logits, labels, vocab_size=self.config.beatmap_config.vocab_size, **kwargs)
+                loss += 0.5 * mlm_loss
 
-        # noinspection PyProtectedMember
-        if self.config._attn_implementation == "flash_attention_2":
-            with nullcontext() if self.config.beatmap_config.repad_logits_with_grad or labels is None else torch.no_grad():
-                logits = _pad_cm3p_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
+            # noinspection PyProtectedMember
+            if self.config._attn_implementation == "flash_attention_2":
+                with nullcontext() if self.config.beatmap_config.repad_logits_with_grad or labels is None else torch.no_grad():
+                    logits = _pad_cm3p_output(inputs=logits, indices=indices, batch=batch_size, seqlen=seq_len)
 
         return CM3POutput(
             loss=loss,
@@ -1372,4 +1382,5 @@ __all__ = [
     "CM3PBeatmapModel",
     "CM3PBeatmapModelWithProjection",
     "CM3PForBeatmapClassification",
+    "CM3PForMaskedLM",
 ]

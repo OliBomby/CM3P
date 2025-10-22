@@ -55,8 +55,8 @@ def compute_metrics(eval_pred: EvalPrediction, compute_result) -> dict | None:
     if eval_pred.label_ids is not None and len(eval_pred.label_ids) > 0:
         if eval_pred.label_ids.ndim == 1:
             # Classification task
-            logits: torch.FloatTensor = eval_pred.predictions if isinstance(eval_pred.predictions, torch.Tensor) else torch.tensor(eval_pred.predictions)
-            labels: torch.LongTensor = eval_pred.label_ids if isinstance(eval_pred.label_ids, torch.Tensor) else torch.tensor(eval_pred.label_ids)
+            logits: torch.FloatTensor = eval_pred.predictions
+            labels: torch.LongTensor = eval_pred.label_ids
             predictions = logits.argmax(-1)
 
             var_class = -200

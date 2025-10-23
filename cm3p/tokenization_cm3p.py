@@ -295,7 +295,7 @@ class CM3PBeatmapTokenizer(PreTrainedTokenizer):
         if not save_directory:
             raise ValueError("The save_directory must be specified.")
 
-        vocab_file = f"{save_directory}/{filename_prefix or ""}vocab.json"
+        vocab_file = f"{save_directory}/{filename_prefix or ''}vocab.json"
         with open(vocab_file, 'w', encoding='utf-8') as f:
             json.dump(self.vocab, f, ensure_ascii=False)
 
@@ -796,7 +796,7 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         if not save_directory:
             raise ValueError("The save_directory must be specified.")
 
-        vocab_file = f"{save_directory}/{filename_prefix or ""}vocab.json"
+        vocab_file = f"{save_directory}/{filename_prefix or ''}vocab.json"
         with open(vocab_file, 'w', encoding='utf-8') as f:
             json.dump(self.vocab, f, ensure_ascii=False)
 

@@ -139,6 +139,7 @@ class CM3PAudioKwargs(AudioKwargs, total=False):
     hop_length: Optional[int]
     window_size: Optional[int]
     audio_length_per_tok: Optional[int]
+    device: Optional[str]
 
 
 # noinspection PyTypedDict
@@ -166,6 +167,7 @@ class CM3PProcessorKwargs(CommonKwargs, CM3PBeatmapKwargs, CM3PTokenizerKwargs, 
             "hop_length": 160,
             "window_size": 400,
             "audio_length_per_tok": 8,
+            "device": "cpu",
         },
         "common_kwargs": {
             "return_tensors": "pt",

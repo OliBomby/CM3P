@@ -119,6 +119,7 @@ processor:
         audio_length_per_tok: 8
         hop_length: ${...audio_feature_extractor.hop_length}
         window_size: ${...audio_feature_extractor.n_fft}
+        device: 'cpu'
 
       common_kwargs:
         return_tensors: "pt"

@@ -10,7 +10,7 @@ save_path = r"../saved_logs/train_v7_classifier2/trainer_output/checkpoint-10000
 ranked_threshold = 0.4
 
 processor = CM3PProcessor.from_pretrained(save_path)
-model = CM3PForBeatmapClassification.from_pretrained(save_path, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="sdpa")
+model = CM3PForBeatmapClassification.from_pretrained(save_path, dtype=torch.bfloat16, device_map=device, attn_implementation="sdpa")
 
 # audio = r"..\resources/audio.mp3"
 # beatmap = r"..\resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"
@@ -25,7 +25,7 @@ beatmap = r"C:\Users\Olivier\AppData\Local\osu!\Songs\beatmap-638965817922162241
 # beatmap = r"C:\Users\Olivier\AppData\Local\osu!\Songs\1848363 garnet feat F9 - hauynite\garnet feat. F9 - hauynite (Shurelia) [rumination].osu"
 
 
-inputs = processor(beatmap=beatmap, audio=audio)
+inputs = processor(beatmap=beatmap, audio=audio, device=device)
 inputs = inputs.to(device, dtype=torch.bfloat16)
 
 with torch.no_grad():

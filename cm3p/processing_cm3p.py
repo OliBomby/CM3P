@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Optional, Union, IO, TypedDict
 
 import numpy as np
-import soxr
 from pandas import Series
 from slider import Beatmap, HoldNote
 from transformers import WhisperFeatureExtractor, AutoProcessor, BatchEncoding
@@ -348,6 +347,7 @@ class CM3PProcessor(ProcessorMixin):
                 array = array.mean(axis=1)
             # Resample if the sampling rate is different from the expected one
             if s != sampling_rate:
+                import soxr
                 array = soxr.resample(array, s, sampling_rate, quality="HQ")
             audio_buffers.append(array)
 

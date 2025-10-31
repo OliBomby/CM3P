@@ -24,7 +24,7 @@ logger = logging.get_logger(__name__)
 
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/2021-03-07-clip.html
-def contrastive_loss(logits: torch.Tensor, target: torch.LongTensor = None) -> torch.Tensor:
+def contrastive_loss(logits: torch.Tensor, target: torch.Tensor = None) -> torch.Tensor:
     target = target if target is not None else torch.arange(len(logits), device=logits.device)
     return nn.functional.cross_entropy(logits, target)
 
@@ -192,7 +192,7 @@ class CM3PBeatmapModelOutput(BaseModelOutputWithPooling):
     """
 
     beatmap_embeds: Optional[torch.FloatTensor] = None
-    audio_model_output: CM3PAudioModelOutput = None
+    audio_model_output: Optional[CM3PAudioModelOutput] = None
 
 
 @dataclass
@@ -235,8 +235,8 @@ class CM3POutput(ModelOutput):
     """
 
     loss: Optional[torch.FloatTensor] = None
-    logits_per_beatmap: Optional[torch.FloatTensor] = None
-    logits_per_metadata: Optional[torch.FloatTensor] = None
+    logits_per_beatmap: Optional[torch.Tensor] = None
+    logits_per_metadata: Optional[torch.Tensor] = None
     metadata_embeds: Optional[torch.FloatTensor] = None
     beatmap_embeds: Optional[torch.FloatTensor] = None
     logits: Optional[torch.FloatTensor] = None
@@ -301,6 +301,7 @@ class CM3PMetadataTransformer(nn.Module):
     def __init__(self, config: CM3PMetadataConfig):
         super().__init__()
         self.config = config
+        # noinspection PyTypeChecker
         self.encoder = ModernBertModel(config)
 
     def get_input_embeddings(self):
@@ -486,6 +487,7 @@ class CM3PAudioEncoder(nn.Module):
         self.config = config
         self.conv1 = nn.Conv1d(config.n_mels, config.hidden_size, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(config.hidden_size, config.hidden_size, kernel_size=3, stride=2, padding=1)
+        # noinspection PyTypeChecker
         self.encoder = ModernBertModel(config)
         self.multi_modal_projector = CM3PMultiModalProjector(config)
 
@@ -531,6 +533,7 @@ class CM3PBeatmapTransformer(nn.Module):
         super().__init__()
         self.config = config
         self.audio_encoder = CM3PAudioEncoder(config.audio_config)
+        # noinspection PyTypeChecker
         self.encoder = ModernBertModel(config)
 
     def get_input_embeddings(self):
@@ -590,7 +593,7 @@ class CM3PBeatmapTransformer(nn.Module):
 
         audio_model_outputs = None
         if input_features is not None:
-            audio_model_outputs: CM3PAudioModelOutput = self.audio_encoder(
+            audio_model_outputs = self.audio_encoder(
                 input_features=input_features,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
@@ -744,9 +747,9 @@ class CM3PModel(CM3PPreTrainedModel):
         metadata_config = config.metadata_config
         beatmap_config = config.beatmap_config
 
-        self.projection_dim = config.projection_dim
-        self.metadata_embed_dim = metadata_config.hidden_size
-        self.beatmap_embed_dim = beatmap_config.hidden_size
+        self.projection_dim: int = config.projection_dim
+        self.metadata_embed_dim: int = metadata_config.hidden_size
+        self.beatmap_embed_dim: int = beatmap_config.hidden_size
         self.loss_type = config.loss_type
 
         metadata_model = CM3PMetadataModel._from_config(metadata_config)

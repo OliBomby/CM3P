@@ -177,6 +177,7 @@ class CM3PAudioConfig(PretrainedConfig):
 
 class CM3PBeatmapConfig(PretrainedConfig):
     model_type = "CM3PBeatmap"
+    is_composition = True
     base_config_key = "beatmap_config"
     sub_configs = {"audio_config": CM3PAudioConfig}
 
@@ -222,12 +223,15 @@ class CM3PBeatmapConfig(PretrainedConfig):
         sparse_pred_ignore_index=-100,
         reference_compile=None,
         repad_logits_with_grad=False,
+
+        attn_implementation: str = None,
         **kwargs,
     ):
         super().__init__(
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
             eos_token_id=eos_token_id,
+            attn_implementation=attn_implementation,
             **kwargs,
         )
 
@@ -235,7 +239,11 @@ class CM3PBeatmapConfig(PretrainedConfig):
             audio_config = {}
             logger.info("`audio_config` is `None`. Initializing the `CM3PAudioConfig` with default values.")
 
-        self.audio_config = CM3PAudioConfig(**audio_config)
+        self.audio_config = CM3PAudioConfig(
+            attn_implementation=attn_implementation,
+            **audio_config
+        )
+
         self.audio_sos_token_id = audio_sos_token_id
         self.audio_eos_token_id = audio_eos_token_id
         self.audio_token_id = audio_token_id
@@ -280,6 +288,7 @@ class CM3PBeatmapConfig(PretrainedConfig):
 
 class CM3PConfig(PretrainedConfig):
     model_type = "CM3P"
+    is_composition = True
     sub_configs = {"metadata_config": CM3PMetadataConfig, "beatmap_config": CM3PBeatmapConfig}
 
     def __init__(
@@ -292,9 +301,14 @@ class CM3PConfig(PretrainedConfig):
         initializer_range=0.02,
         loss_type=None,
         has_decoder_head=False,
+
+        attn_implementation: str = None,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        super().__init__(
+            attn_implementation=attn_implementation,
+            **kwargs
+        )
 
         if metadata_config is None:
             metadata_config = {}
@@ -304,8 +318,14 @@ class CM3PConfig(PretrainedConfig):
             beatmap_config = {}
             logger.debug("`beatmap_config` is `None`. initializing the `CM3PBeatmapConfig` with default values.")
 
-        self.metadata_config = CM3PMetadataConfig(**metadata_config)
-        self.beatmap_config = CM3PBeatmapConfig(**beatmap_config)
+        self.metadata_config = CM3PMetadataConfig(
+            attn_implementation=attn_implementation,
+            **metadata_config
+        )
+        self.beatmap_config = CM3PBeatmapConfig(
+            attn_implementation=attn_implementation,
+            **beatmap_config
+        )
 
         self.projection_dim = projection_dim
         self.logit_scale_init_value = logit_scale_init_value

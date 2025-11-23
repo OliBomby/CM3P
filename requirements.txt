@@ -7,3 +7,4 @@ pandas
 pyarrow
 matplotlib
 pytest
+soxr

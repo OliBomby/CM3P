@@ -112,6 +112,7 @@ def parse_args():
     parser.add_argument("--revision", type=str, default="main", help="Target branch/revision on Hub.")
     parser.add_argument("--push-only", action="store_true", help="Only push already existing repo metadata (do not reload model).")
     parser.add_argument("--trust-remote-code", action="store_true", help="Set trust_remote_code=True while loading (if needed).")
+    parser.add_argument("--use-temp-dir", action="store_true", help="Save artifacts to a temporary directory before pushing to avoid path collisions (recommended).")
     return parser.parse_args()
 
 
@@ -170,6 +171,7 @@ def main():
             private=args.private,
             commit_message=args.commit_message,
             revision=args.revision,
+            use_temp_dir=args.use_temp_dir,
         )
         print("[success] Model push complete.")
 
@@ -180,6 +182,7 @@ def main():
                 private=args.private,
                 commit_message=args.commit_message,
                 revision=args.revision,
+                use_temp_dir=args.use_temp_dir,
             )
             print("[success] Processor push complete.")
         else:

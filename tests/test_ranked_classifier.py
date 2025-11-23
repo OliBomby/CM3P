@@ -2,6 +2,8 @@ import pytest
 import torch
 from pathlib import Path
 
+from transformers import AutoProcessor, AutoModelForSequenceClassification
+
 from cm3p import CM3PForBeatmapClassification
 from cm3p.processing_cm3p import CM3PProcessor
 
@@ -22,12 +24,12 @@ BEATMAP_PATH = str((RESOURCES_DIR / "Denkishiki Karen Ongaku Shuudan - Aoki Koto
 def test_ranked_classifier_runs(audio_path, beatmap_path, remote):
     try:
         if remote:
-            processor = CM3PProcessor.from_pretrained(
+            processor = AutoProcessor.from_pretrained(
                 HF_CHECKPOINT,
                 trust_remote_code=True,
                 revision="main",
             )
-            model = CM3PForBeatmapClassification.from_pretrained(
+            model = AutoModelForSequenceClassification.from_pretrained(
                 HF_CHECKPOINT,
                 torch_dtype=torch_dtype,
                 device_map=device,

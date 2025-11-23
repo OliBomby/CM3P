@@ -180,6 +180,7 @@ Multiple metadata sequences per beatmap allow structured negatives (e.g., one wi
 
 ---
 ## 10. Roadmap / Next Steps
+- Dockerfile for easy training setup.
 - Colab notebook examples for inference & embedding extraction.
 - Add evaluation suite for embedding quality (e.g., tag clustering, similarity ranking).
 - Evaluate beatmap generative models using distributions of CM3P embeddings.

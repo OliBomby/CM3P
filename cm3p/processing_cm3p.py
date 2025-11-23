@@ -11,7 +11,8 @@ from huggingface_hub.errors import HfHubHTTPError
 from pandas import Series
 from slider import Beatmap, HoldNote
 from transformers import WhisperFeatureExtractor, AutoProcessor, BatchEncoding
-from transformers.tokenization_utils_base import TruncationStrategy
+from transformers.dynamic_module_utils import custom_object_save
+from transformers.tokenization_utils_base import TruncationStrategy, PreTrainedTokenizerBase
 from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NAME, logging
 from huggingface_hub import CommitOperationAdd, create_branch, create_commit
 
@@ -655,36 +656,91 @@ class CM3PProcessor(ProcessorMixin):
         return self.beatmap_tokenizer.decode(*args, **kwargs)
 
     def save_pretrained(self, save_directory, push_to_hub: bool = False, **kwargs):
+        """
+        Save processor and its sub-components, with support for AutoProcessor remote code.
+
+        This is a lightly adapted version of ProcessorMixin.save_pretrained:
+        - child attributes are saved into subfolders (audio_feature_extractor/, beatmap_parser/, ...);
+        - when self._auto_class is set (via register_for_auto_class), custom_object_save is used
+          so that auto_map and dynamic modules are written correctly.
+        """
         os.makedirs(save_directory, exist_ok=True)
 
-        for attribute_name in self.attributes:
-            attribute = getattr(self, attribute_name)
-            # Include the processor class in the attribute config so this processor can then be reloaded with the
-            # `AutoProcessor` API.
-            if hasattr(attribute, "_set_processor_class"):
-                # noinspection PyProtectedMember
-                attribute._set_processor_class(self.__class__.__name__)
-            attribute.save_pretrained(os.path.join(save_directory, attribute_name))
-
-        output_processor_file = os.path.join(save_directory, PROCESSOR_NAME)
-        self.to_json_file(output_processor_file)
-        # noinspection PyUnresolvedReferences
-        logger.warning_once(f"processor saved in {output_processor_file}")
-
+        # Handle Hub integration (same as ProcessorMixin / your existing code)
         if push_to_hub:
             commit_message = kwargs.pop("commit_message", None)
             repo_id = kwargs.pop("repo_id", save_directory.split(os.path.sep)[-1])
             repo_id = self._create_repo(repo_id, **kwargs)
             files_timestamps = self._get_files_timestamps(save_directory)
+        else:
+            commit_message = None
+            repo_id = None
+            files_timestamps = None
 
+        # If we have a custom processor registered for an Auto class,
+        # save its code and dependencies as a dynamic module and
+        # populate the auto_map field in processor_config.json.
+        if self._auto_class is not None:
+            attrs = [getattr(self, attribute_name) for attribute_name in self.attributes]
+
+            # For tokenizers, we pass their init_kwargs; for other objects, we pass the object itself.
+            configs = []
+            for a in attrs:
+                if isinstance(a, PreTrainedTokenizerBase):
+                    configs.append(a.init_kwargs)
+                else:
+                    configs.append(a)
+
+            # Include the processor itself so its class is exported.
+            configs.append(self)
+
+            custom_object_save(self, save_directory, config=configs)
+
+        # Save each sub-component into its own subfolder
+        for attribute_name in self.attributes:
+            attribute = getattr(self, attribute_name)
+
+            # Include the processor class in the attribute config so this
+            # processor can then be reloaded with the AutoProcessor API.
+            if hasattr(attribute, "_set_processor_class"):
+                # noinspection PyProtectedMember
+                attribute._set_processor_class(self.__class__.__name__)
+
+            attribute.save_pretrained(os.path.join(save_directory, attribute_name))
+
+        # Clean up temporary auto_map injected into tokenizers, if any
+        if self._auto_class is not None:
+            for attribute_name in self.attributes:
+                attribute = getattr(self, attribute_name)
+                if isinstance(attribute, PreTrainedTokenizerBase) and "auto_map" in attribute.init_kwargs:
+                    del attribute.init_kwargs["auto_map"]
+
+        # Write processor_config.json (or equivalent)
+        output_processor_file = os.path.join(save_directory, PROCESSOR_NAME)
+        processor_dict = self.to_dict()
+
+        # If processor_dict only contains processor_class, we skip writing the file,
+        # matching the upstream behavior; otherwise we save it.
+        if set(processor_dict.keys()) != {"processor_class"}:
+            self.to_json_file(output_processor_file)
+            # noinspection PyUnresolvedReferences
+            logger.warning_once(f"processor saved in {output_processor_file}")
+
+        # If requested, upload the modified files to the Hub
+        if push_to_hub:
             self._upload_modified_files(
                 save_directory,
                 repo_id,
                 files_timestamps,
                 commit_message=commit_message,
                 token=kwargs.get("token"),
+                create_pr=kwargs.get("create_pr", False),
+                revision=kwargs.get("revision"),
+                commit_description=kwargs.get("commit_description"),
             )
 
+        if set(processor_dict.keys()) == {"processor_class"}:
+            return []
         return [output_processor_file]
 
     @classmethod

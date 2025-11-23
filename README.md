@@ -20,7 +20,7 @@ import torch
 from transformers import AutoProcessor, AutoModel
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-repo_id = r"OliBomby/CM3P"
+repo_id = "OliBomby/CM3P"
 
 processor = AutoProcessor.from_pretrained(repo_id, trust_remote_code=True, revision="main")
 model = AutoModel.from_pretrained(repo_id, device_map=device, dtype=torch.bfloat16, trust_remote_code=True, revision="main")

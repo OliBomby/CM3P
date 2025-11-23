@@ -135,6 +135,7 @@ class CM3PTokenizerKwargs(TypedDict, total=False):
 class CM3PBeatmapKwargs(CM3PTokenizerKwargs, total=False):
     window_length_sec: float
     window_stride_sec: float
+    min_window_length_sec: float
 
 
 class CM3PAudioKwargs(AudioKwargs, total=False):
@@ -563,7 +564,7 @@ class CM3PProcessor(ProcessorMixin):
                     **beatmap_kwargs,
                 )
 
-                if audio is not None:
+                if all(a is not None for a in audio):
                     data = dict(beatmap_encoding)
                     data["input_features"] = self._retrieve_input_features(batch_audio, **audio_kwargs)
                     beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)
@@ -577,7 +578,7 @@ class CM3PProcessor(ProcessorMixin):
                     },
                     tensor_type=return_tensors,
                 )
-                if audio is not None:
+                if all(a is not None for a in audio):
                     data = dict(beatmap_encoding)
                     data["input_features"] = torch.zeros((0, self.audio_feature_extractor.feature_size, max_source_positions), dtype=torch.float) if return_tensors == "pt" else []
                     beatmap_encoding = BatchFeature(data, tensor_type=return_tensors)

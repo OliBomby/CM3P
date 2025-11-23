@@ -901,7 +901,7 @@ class CM3PModel(CM3PPreTrainedModel):
         )
         output_logits = output_logits if output_logits is not None else self.config.has_decoder_head
 
-        if metadata_ids.dim() == 3 and return_loss and metadata_variation_classes is None:
+        if metadata_ids is not None and metadata_ids.dim() == 3 and return_loss and metadata_variation_classes is None:
             raise ValueError("When providing multiple metadata variations, metadata_variation_classes must be provided in order to compute loss correctly.")
 
         if output_logits and not self.config.has_decoder_head:
@@ -930,52 +930,60 @@ class CM3PModel(CM3PPreTrainedModel):
                         inputs=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, labels=labels
                     )
 
-        beatmap_outputs: BaseModelOutputWithPooling = self.beatmap_model(
-            input_ids=input_ids,
-            input_features=input_features,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            inputs_embeds=inputs_embeds,
-            indices=indices,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
-            batch_size=batch_size,
-            seq_len=seq_len,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-        )
-
-        metadata_outputs: BaseModelOutputWithPooling = self.metadata_model(
-            input_ids=metadata_ids,
-            attention_mask=metadata_attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-        )
-
-        beatmap_embeds = beatmap_outputs.pooler_output
-        beatmap_embeds = self.beatmap_projection(beatmap_embeds)
-
-        metadata_embeds = metadata_outputs.pooler_output
-        metadata_embeds = self.metadata_projection(metadata_embeds)
-
-        # normalized features
-        beatmap_embeds = beatmap_embeds / _get_vector_norm(beatmap_embeds)
-        metadata_embeds = metadata_embeds / _get_vector_norm(metadata_embeds)
-
-        # cosine similarity as logits
-        logits_per_metadata = torch.matmul(metadata_embeds, beatmap_embeds.t().to(metadata_embeds.device))
-        logits_per_metadata = logits_per_metadata * self.logit_scale.exp().to(metadata_embeds.device)
-
-        if logits_per_metadata.dim() == 3:
-            logits_per_beatmap = logits_per_metadata.permute(2, 0, 1)
-        else:
-            logits_per_beatmap = logits_per_metadata.t()
-
-        loss = None
-        if return_loss:
-            loss = cm3p_loss(logits_per_metadata, metadata_variation_classes)
-
+        beatmap_embeds = None
+        beatmap_outputs = None
+        metadata_embeds = None
+        metadata_outputs = None
+        logits_per_beatmap = None
+        logits_per_metadata = None
+        loss = 0 if return_loss else None
         logits = None
+
+        if input_ids is not None:
+            beatmap_outputs: BaseModelOutputWithPooling = self.beatmap_model(
+                input_ids=input_ids,
+                input_features=input_features,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                inputs_embeds=inputs_embeds,
+                indices=indices,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+            )
+
+            beatmap_embeds = beatmap_outputs.pooler_output
+            beatmap_embeds = self.beatmap_projection(beatmap_embeds)
+            beatmap_embeds = beatmap_embeds / _get_vector_norm(beatmap_embeds)
+
+        if metadata_ids is not None:
+            metadata_outputs: BaseModelOutputWithPooling = self.metadata_model(
+                input_ids=metadata_ids,
+                attention_mask=metadata_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+            )
+
+            metadata_embeds = metadata_outputs.pooler_output
+            metadata_embeds = self.metadata_projection(metadata_embeds)
+            metadata_embeds = metadata_embeds / _get_vector_norm(metadata_embeds)
+
+        if metadata_embeds is not None and beatmap_embeds is not None:
+            # cosine similarity as logits
+            logits_per_metadata = torch.matmul(metadata_embeds, beatmap_embeds.t().to(metadata_embeds.device))
+            logits_per_metadata = logits_per_metadata * self.logit_scale.exp().to(metadata_embeds.device)
+
+            if logits_per_metadata.dim() == 3:
+                logits_per_beatmap = logits_per_metadata.permute(2, 0, 1)
+            else:
+                logits_per_beatmap = logits_per_metadata.t()
+
+            if return_loss:
+                loss = cm3p_loss(logits_per_metadata, metadata_variation_classes)
+
         if output_logits:
             logits = (
                 self.compiled_head(beatmap_outputs.last_hidden_state)

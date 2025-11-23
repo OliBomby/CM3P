@@ -7,11 +7,13 @@ from pathlib import Path
 from typing import Optional, Union, IO, TypedDict
 
 import numpy as np
+from huggingface_hub.errors import HfHubHTTPError
 from pandas import Series
 from slider import Beatmap, HoldNote
 from transformers import WhisperFeatureExtractor, AutoProcessor, BatchEncoding
 from transformers.tokenization_utils_base import TruncationStrategy
 from transformers.utils import is_torch_available, PaddingStrategy, PROCESSOR_NAME, logging
+from huggingface_hub import CommitOperationAdd, create_branch, create_commit
 
 from .configuration_cm3p import CM3PConfig
 from .parsing_cm3p import CM3PBeatmapParser, load_beatmap, get_song_length
@@ -701,6 +703,76 @@ class CM3PProcessor(ProcessorMixin):
             ))
 
         return args
+
+    def _upload_modified_files(
+        self,
+        working_dir: Union[str, os.PathLike],
+        repo_id: str,
+        files_timestamps: dict[str, float],
+        commit_message: Optional[str] = None,
+        token: Optional[Union[bool, str]] = None,
+        create_pr: bool = False,
+        revision: Optional[str] = None,
+        commit_description: Optional[str] = None,
+    ):
+        """
+        Uploads all modified files in `working_dir` to `repo_id`, based on `files_timestamps`.
+        """
+        working_dir = Path(working_dir)
+
+        if commit_message is None:
+            commit_message = "Upload CM3P processor"
+        modified_files = [
+            f
+            for f in working_dir.iterdir()
+            if str(f) not in files_timestamps or f.stat().st_mtime > files_timestamps[str(f)]
+        ]
+
+        # filter for actual files + folders at the root level
+        modified_files = [
+            f
+            for f in modified_files
+            if f.is_file() or f.is_dir()
+        ]
+
+        operations = []
+        # upload standalone files
+        for file in modified_files:
+            if file.is_dir():
+                # go over individual files of folder
+                for f in file.iterdir():
+                    operations.append(
+                        CommitOperationAdd(
+                            path_or_fileobj=f, path_in_repo=f.relative_to(working_dir).as_posix()
+                        )
+                    )
+            else:
+                operations.append(
+                    CommitOperationAdd(path_or_fileobj=file, path_in_repo=file.relative_to(working_dir).as_posix())
+                )
+
+        if revision is not None and not revision.startswith("refs/pr"):
+            try:
+                create_branch(repo_id=repo_id, branch=revision, token=token, exist_ok=True)
+            except HfHubHTTPError as e:
+                if e.response.status_code == 403 and create_pr:
+                    # If we are creating a PR on a repo we don't have access to, we can't create the branch.
+                    # so let's assume the branch already exists. If it's not the case, an error will be raised when
+                    # calling `create_commit` below.
+                    pass
+                else:
+                    raise
+
+        logger.info(f"Uploading the following files to {repo_id}: {','.join([f.relative_to(working_dir).as_posix() for f in modified_files])}")
+        return create_commit(
+            repo_id=repo_id,
+            operations=operations,
+            commit_message=commit_message,
+            commit_description=commit_description,
+            token=token,
+            create_pr=create_pr,
+            revision=revision,
+        )
 
 AutoProcessor.register(CM3PConfig, CM3PProcessor)
 

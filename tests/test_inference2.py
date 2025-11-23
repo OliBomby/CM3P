@@ -1,15 +1,12 @@
 import numpy as np
 import torch
+from transformers import AutoProcessor, AutoModel
 
-from cm3p.modeling_cm3p import CM3PModel
-from cm3p.processing_cm3p import CM3PProcessor
 from cm3p.tokenization_cm3p import CM3PMetadata
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-save_path = r"saved_logs/train_v7/trainer_output/checkpoint-30000"
-
-processor = CM3PProcessor.from_pretrained(save_path)
-model = CM3PModel.from_pretrained(save_path, torch_dtype=torch.bfloat16, device_map=device, attn_implementation="flash_attention_2")
+processor = AutoProcessor.from_pretrained("OliBomby/CM3P", revision="main", trust_remote_code=True)
+model = AutoModel.from_pretrained("OliBomby/CM3P", revision="main", torch_dtype=torch.bfloat16, device_map=device, attn_implementation="flash_attention_2", trust_remote_code=True)
 
 audio = r"resources/audio.mp3"
 beatmap = r"resources/Denkishiki Karen Ongaku Shuudan - Aoki Kotou no Anguis (OliBomby) [Ardens Spes].osu"

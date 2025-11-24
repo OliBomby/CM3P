@@ -207,3 +207,4 @@ Multiple metadata sequences per beatmap allow structured negatives (e.g., one wi
 5. [Beat Learning](https://github.com/sedthh/BeatLearning) by sedthh (Richard Nagyfi)
 6. [osu!dreamer](https://github.com/jaswon/osu-dreamer) by jaswon (Jason Won)
 7. [Mapperatorinator](https://github.com/OliBomby/Mapperatorinator) by OliBomby (Olivier Schipper)
+8. [osuBERT](https://github.com/khang06/osuBERT) by Khangaroo

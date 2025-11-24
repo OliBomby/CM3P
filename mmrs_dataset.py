@@ -221,7 +221,7 @@ class BeatmapDatasetIterable:
 
     def _get_next_tracks(self) -> dict:
         for beatmapset_id in self.metadata.index.get_level_values(0).unique():
-            logger.info(f"Processing beatmap set ID: {beatmapset_id}")
+            logger.debug(f"Processing beatmap set ID: {beatmapset_id}")
             metadata = self.metadata.loc[beatmapset_id]
             first_beatmap_metadata = metadata.iloc[0]
 
@@ -249,10 +249,10 @@ class BeatmapDatasetIterable:
                 if audio_path in audio_cache:
                     audio_samples = audio_cache[audio_path]
                 else:
-                    logger.info(f"Loading audio file: {audio_path}")
+                    logger.debug(f"Loading audio file: {audio_path}")
                     audio_samples = load_audio_file(audio_path, self.args.sampling_rate, speed)
                     audio_cache[audio_path] = audio_samples
-                    logger.info(f"Audio length: {len(audio_samples) / self.args.sampling_rate:.2f} seconds")
+                    logger.debug(f"Audio length: {len(audio_samples) / self.args.sampling_rate:.2f} seconds")
             except Exception as e:
                 logger.warning(f"Failed to load audio file: {audio_path}")
                 logger.warning(e)

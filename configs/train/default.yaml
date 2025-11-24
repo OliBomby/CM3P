@@ -45,6 +45,7 @@ training:
   eval_accumulation_steps: 1
   include_for_metrics: ['inputs']
   batch_eval_metrics: true
+  torch_compile: false
 
 processor:
   audio_feature_extractor:

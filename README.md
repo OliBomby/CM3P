@@ -67,10 +67,23 @@ pip install -r requirements.txt
 # Follow official instructions; otherwise switch attn implementation in config.
 ```
 
+### Docker Steps (Optional)
+```bash
+# Clone the repository
+git clone https://github.com/OliBomby/CM3P.git
+cd CM3P
+
+# Build and run the Docker container
+docker compose up -d
+docker attach cm3p_space
+cd cm3p
+```
+The Docker compose is configured to mount the `datasets` directory next to the `CM3P` directory, so place your datasets there to use them in the container.
+
 ---
 ## 3. Data Preparation
 
-Create your own dataset using the [Mapperator console app](https://github.com/mappingtools/Mapperator/blob/master/README.md#create-a-high-quality-dataset). It requires an [osu! OAuth client token](https://osu.ppy.sh/home/account/edit) to verify beatmaps and get additional metadata. Place the dataset in a `datasets` directory next to the `Mapperatorinator` directory.
+Create your own dataset using the [Mapperator console app](https://github.com/mappingtools/Mapperator/blob/master/README.md#create-a-high-quality-dataset). It requires an [osu! OAuth client token](https://osu.ppy.sh/home/account/edit) to verify beatmaps and get additional metadata.
 
 ```sh
 Mapperator.ConsoleApp.exe dataset2 -t "/Mapperatorinator/datasets/beatmap_descriptors.csv" -i "path/to/osz/files" -o "/datasets/cool_dataset"
@@ -126,7 +139,7 @@ I recommend making a copy of an existing config (e.g., `v7.yaml`) and modifying 
 Provide a checkpoint path or load a Hub model:
 
 ```bash
-python train.py -cn "v7_classifier" pretrained_path="OliBomby/CM3P" dataset={train_dataset_paths:["MMRS39389","MMUS40000"],test_dataset_paths:["MMRS39389","MMUS40000"]} training={logging_steps:10,dataloader_num_workers:8} wandb_entity=mappingtools
+python train.py -cn "v7_classifier" from_pretrained="OliBomby/CM3P" 'dataset={train_dataset_paths:["/workspace/datasets/MMRS39389"],test_dataset_paths:["/workspace/datasets/MMRS39389"],train_dataset_end:39000,test_dataset_start:39000,test_dataset_end:39389}' 'training={dataloader_num_workers:8}' wandb_entity=mappingtools
 ```
 
 ### Resume Training
@@ -180,7 +193,7 @@ Multiple metadata sequences per beatmap allow structured negatives (e.g., one wi
 
 ---
 ## 10. Roadmap / Next Steps
-- Dockerfile for easy training setup.
+- Find some way to use PyTorch compilation during training.
 - Colab notebook examples for inference & embedding extraction.
 - Add evaluation suite for embedding quality (e.g., tag clustering, similarity ranking).
 - Evaluate beatmap generative models using distributions of CM3P embeddings.

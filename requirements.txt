@@ -8,3 +8,4 @@ pyarrow
 matplotlib
 pytest
 soxr
+librosa

@@ -1,0 +1,26 @@
+name: cm3p
+services:
+    cm3p:
+        stdin_open: true
+        tty: true
+        deploy:
+            resources:
+                reservations:
+                    devices:
+                        - driver: nvidia
+                          count: all
+                          capabilities:
+                              - gpu
+        volumes:
+        - .:/workspace/cm3p
+        - ../datasets:/workspace/datasets
+        network_mode: host
+        container_name: cm3p_space
+        shm_size: 8gb
+        build: .
+        # image: my_fixed_image
+        command: /bin/bash
+        environment:
+          - PROJECT_PATH=/workspace/cm3p
+          - WANDB_API_KEY=${WANDB_API_KEY}
+          - WANDB_ENTITY=${WANDB_ENTITY}

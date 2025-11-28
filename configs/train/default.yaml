@@ -150,6 +150,7 @@ dataset:                  # Data settings
   include_metadata: true  # Whether to include metadata in the dataset
   include_audio: true  # Whether to include audio in the dataset
   include_beatmap: true  # Whether to include beatmap in the dataset
+  include_source_metadata: false  # Whether to include source metadata in the dataset
   masked_lm_prob: 0.25  # Probability of masking a token for masked LM training
   masked_lm_split: [0.8, 0.1, 0.1]  # Split of masking types: [mask, random, original]
   beatmap_mismatch_prob: 0.0  # Probability of mismatching beatmap and audio to increase robustness in some downstream classification tasks

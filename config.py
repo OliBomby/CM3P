@@ -100,6 +100,7 @@ class DataSetConfig:
     include_metadata: bool
     include_audio: bool
     include_beatmap: bool
+    include_source_metadata: bool
     masked_lm_prob: float
     masked_lm_split: list[float]
     beatmap_mismatch_prob: float

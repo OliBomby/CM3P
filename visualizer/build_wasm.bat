@@ -51,9 +51,5 @@ echo Build successful!
 echo WASM module is ready at: wasm\pkg\
 echo ========================================
 echo.
-echo To test the performance improvements:
-echo 1. Start a local server: python -m http.server 8000
-echo 2. Open http://localhost:8000/benchmark.html
-echo.
 pause
 

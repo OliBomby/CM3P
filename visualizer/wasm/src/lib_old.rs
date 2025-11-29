@@ -11,59 +11,7 @@ fn simple_random(state: &mut u32) -> f32 {
 }
 
 // ============================================================================
-// SIMD-Optimized Operations
-// ============================================================================
-
-#[inline(always)]
-fn dot_product_simd(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len();
-    let mut sum = 0.0f32;
-
-    // Process 4 elements at a time for better CPU utilization
-    let chunks = len / 4;
-    let remainder = len % 4;
-
-    for i in 0..chunks {
-        let idx = i * 4;
-        sum += a[idx] * b[idx];
-        sum += a[idx + 1] * b[idx + 1];
-        sum += a[idx + 2] * b[idx + 2];
-        sum += a[idx + 3] * b[idx + 3];
-    }
-
-    // Handle remaining elements
-    for i in (chunks * 4)..len {
-        sum += a[i] * b[i];
-    }
-
-    sum
-}
-
-#[inline(always)]
-fn squared_distance_simd(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len();
-    let mut sum = 0.0f32;
-
-    let chunks = len / 4;
-    for i in 0..chunks {
-        let idx = i * 4;
-        let d0 = a[idx] - b[idx];
-        let d1 = a[idx + 1] - b[idx + 1];
-        let d2 = a[idx + 2] - b[idx + 2];
-        let d3 = a[idx + 3] - b[idx + 3];
-        sum += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
-    }
-
-    for i in (chunks * 4)..len {
-        let d = a[i] - b[i];
-        sum += d * d;
-    }
-
-    sum
-}
-
-// ============================================================================
-// Optimized PCA Implementation
+// PCA Implementation
 // ============================================================================
 
 #[wasm_bindgen]
@@ -72,77 +20,75 @@ pub fn calculate_pca(embeddings_flat: &[f32], n_samples: usize, n_features: usiz
         return vec![];
     }
 
-    // Calculate mean with better cache locality
+    // Calculate mean
     let mut mean = vec![0.0f32; n_features];
-    let inv_n = 1.0 / n_samples as f32;
-
     for i in 0..n_samples {
         let offset = i * n_features;
-        let row = &embeddings_flat[offset..offset + n_features];
         for j in 0..n_features {
-            mean[j] += row[j];
+            mean[j] += embeddings_flat[offset + j];
         }
     }
-
     for j in 0..n_features {
-        mean[j] *= inv_n;
+        mean[j] /= n_samples as f32;
     }
 
-    let mut components: Vec<Vec<f32>> = Vec::with_capacity(2);
-    let mut rng_state = 12345u32;
+    // Helper closure for centered data
+    let get_centered = |i: usize, j: usize| -> f32 {
+        embeddings_flat[i * n_features + j] - mean[j]
+    };
+
+    let mut components = Vec::with_capacity(2);
+    let mut rng_state = 12345u32; // Seed for deterministic behavior in tests
 
     // Calculate first two principal components using power iteration
     for c in 0..2 {
+        // Initialize eigenvector with random values
         let mut ev: Vec<f32> = (0..n_features)
             .map(|_| {
                 #[cfg(target_arch = "wasm32")]
-                { Math::random() as f32 - 0.5 }
+                {
+                    Math::random() as f32 - 0.5
+                }
                 #[cfg(not(target_arch = "wasm32"))]
-                { simple_random(&mut rng_state) - 0.5 }
+                {
+                    simple_random(&mut rng_state) - 0.5
+                }
             })
             .collect();
 
         // Normalize
-        let mut mag: f32 = dot_product_simd(&ev, &ev).sqrt();
-        let inv_mag = 1.0 / mag;
+        let mut mag: f32 = ev.iter().map(|x| x * x).sum::<f32>().sqrt();
         for val in ev.iter_mut() {
-            *val *= inv_mag;
+            *val /= mag;
         }
 
-        // Power iteration with optimized matrix-vector products
+        // Power iteration
         for _ in 0..8 {
-            let mut next_ev = vec![0.0f32; n_features];
-
-            // Compute scores and accumulate in one pass
+            // Project data onto eigenvector
+            let mut scores = vec![0.0f32; n_samples];
             for i in 0..n_samples {
-                let offset = i * n_features;
-                let mut score = 0.0f32;
-
-                // Compute centered dot product
-                let chunks = n_features / 4;
-                for k in 0..chunks {
-                    let idx = k * 4;
-                    score += (embeddings_flat[offset + idx] - mean[idx]) * ev[idx];
-                    score += (embeddings_flat[offset + idx + 1] - mean[idx + 1]) * ev[idx + 1];
-                    score += (embeddings_flat[offset + idx + 2] - mean[idx + 2]) * ev[idx + 2];
-                    score += (embeddings_flat[offset + idx + 3] - mean[idx + 3]) * ev[idx + 3];
-                }
-                for k in (chunks * 4)..n_features {
-                    score += (embeddings_flat[offset + k] - mean[k]) * ev[k];
-                }
-
-                // Accumulate contribution to next eigenvector
+                let mut s = 0.0f32;
                 for j in 0..n_features {
-                    next_ev[j] += score * (embeddings_flat[offset + j] - mean[j]);
+                    s += get_centered(i, j) * ev[j];
                 }
+                scores[i] = s;
+            }
+
+            // Calculate next eigenvector estimate
+            let mut next_ev = vec![0.0f32; n_features];
+            for j in 0..n_features {
+                let mut s = 0.0f32;
+                for i in 0..n_samples {
+                    s += scores[i] * get_centered(i, j);
+                }
+                next_ev[j] = s;
             }
 
             // Normalize
-            mag = dot_product_simd(&next_ev, &next_ev).sqrt();
+            mag = next_ev.iter().map(|x| x * x).sum::<f32>().sqrt();
             if mag > 0.0 {
-                let inv_mag = 1.0 / mag;
                 for val in next_ev.iter_mut() {
-                    *val *= inv_mag;
+                    *val /= mag;
                 }
                 ev = next_ev;
             }
@@ -151,15 +97,17 @@ pub fn calculate_pca(embeddings_flat: &[f32], n_samples: usize, n_features: usiz
         // Orthogonalize second component
         if c == 1 {
             let u: &Vec<f32> = &components[0];
-            let dot = dot_product_simd(u, &ev);
+            let mut dot = 0.0f32;
+            for k in 0..n_features {
+                dot += u[k] * ev[k];
+            }
             for k in 0..n_features {
                 ev[k] -= dot * u[k];
             }
-            mag = dot_product_simd(&ev, &ev).sqrt();
+            mag = ev.iter().map(|x| x * x).sum::<f32>().sqrt();
             if mag > 0.0 {
-                let inv_mag = 1.0 / mag;
                 for val in ev.iter_mut() {
-                    *val *= inv_mag;
+                    *val /= mag;
                 }
             }
         }
@@ -167,34 +115,16 @@ pub fn calculate_pca(embeddings_flat: &[f32], n_samples: usize, n_features: usiz
         components.push(ev);
     }
 
-    // Project data onto principal components with optimized loops
+    // Project data onto principal components
     let mut projected = vec![0.0f32; n_samples * 2];
-    let comp0 = &components[0];
-    let comp1 = &components[1];
-
     for i in 0..n_samples {
-        let offset = i * n_features;
         let mut x = 0.0f32;
         let mut y = 0.0f32;
-
-        let chunks = n_features / 4;
-        for k in 0..chunks {
-            let idx = k * 4;
-            let c0 = embeddings_flat[offset + idx] - mean[idx];
-            let c1 = embeddings_flat[offset + idx + 1] - mean[idx + 1];
-            let c2 = embeddings_flat[offset + idx + 2] - mean[idx + 2];
-            let c3 = embeddings_flat[offset + idx + 3] - mean[idx + 3];
-
-            x += c0 * comp0[idx] + c1 * comp0[idx + 1] + c2 * comp0[idx + 2] + c3 * comp0[idx + 3];
-            y += c0 * comp1[idx] + c1 * comp1[idx + 1] + c2 * comp1[idx + 2] + c3 * comp1[idx + 3];
+        for j in 0..n_features {
+            let val = get_centered(i, j);
+            x += val * components[0][j];
+            y += val * components[1][j];
         }
-
-        for k in (chunks * 4)..n_features {
-            let val = embeddings_flat[offset + k] - mean[k];
-            x += val * comp0[k];
-            y += val * comp1[k];
-        }
-
         projected[i * 2] = x;
         projected[i * 2 + 1] = y;
     }
@@ -203,7 +133,7 @@ pub fn calculate_pca(embeddings_flat: &[f32], n_samples: usize, n_features: usiz
 }
 
 // ============================================================================
-// Optimized K-Means Implementation
+// K-Means Implementation
 // ============================================================================
 
 #[wasm_bindgen]
@@ -216,30 +146,29 @@ pub fn calculate_kmeans(embeddings_flat: &[f32], n_samples: usize, n_features: u
     let mut rng_state = seed;
     let mut centroids = vec![0.0f32; k * n_features];
     for i in 0..k {
+        // Simple LCG for deterministic random selection
         rng_state = rng_state.wrapping_mul(1664525).wrapping_add(1013904223);
         let idx = (rng_state as usize) % n_samples;
-        let src_offset = idx * n_features;
-        let dst_offset = i * n_features;
-        centroids[dst_offset..dst_offset + n_features]
-            .copy_from_slice(&embeddings_flat[src_offset..src_offset + n_features]);
+        for j in 0..n_features {
+            centroids[i * n_features + j] = embeddings_flat[idx * n_features + j];
+        }
     }
 
     let mut labels = vec![0i8; n_samples];
 
-    // Run k-means iterations with optimized distance calculations
+    // Run k-means iterations
     for _ in 0..5 {
-        // Assignment step with SIMD distance computation
+        // Assignment step
         for i in 0..n_samples {
-            let sample_offset = i * n_features;
-            let sample = &embeddings_flat[sample_offset..sample_offset + n_features];
-
             let mut min_dist = f32::INFINITY;
             let mut best_cluster = 0i8;
 
             for c in 0..k {
-                let centroid_offset = c * n_features;
-                let centroid = &centroids[centroid_offset..centroid_offset + n_features];
-                let dist = squared_distance_simd(sample, centroid);
+                let mut dist = 0.0f32;
+                for j in 0..n_features {
+                    let diff = embeddings_flat[i * n_features + j] - centroids[c * n_features + j];
+                    dist += diff * diff;
+                }
 
                 if dist < min_dist {
                     min_dist = dist;
@@ -249,29 +178,22 @@ pub fn calculate_kmeans(embeddings_flat: &[f32], n_samples: usize, n_features: u
             labels[i] = best_cluster;
         }
 
-        // Update step with better memory access patterns
+        // Update step
         let mut sums = vec![0.0f32; k * n_features];
         let mut counts = vec![0usize; k];
 
         for i in 0..n_samples {
             let cluster = labels[i] as usize;
             counts[cluster] += 1;
-            let sample_offset = i * n_features;
-            let sum_offset = cluster * n_features;
-
             for j in 0..n_features {
-                sums[sum_offset + j] += embeddings_flat[sample_offset + j];
+                sums[cluster * n_features + j] += embeddings_flat[i * n_features + j];
             }
         }
 
         for c in 0..k {
             if counts[c] > 0 {
-                let inv_count = 1.0 / counts[c] as f32;
-                let centroid_offset = c * n_features;
-                let sum_offset = c * n_features;
-
                 for j in 0..n_features {
-                    centroids[centroid_offset + j] = sums[sum_offset + j] * inv_count;
+                    centroids[c * n_features + j] = sums[c * n_features + j] / counts[c] as f32;
                 }
             }
         }
@@ -281,7 +203,7 @@ pub fn calculate_kmeans(embeddings_flat: &[f32], n_samples: usize, n_features: u
 }
 
 // ============================================================================
-// Batch Normalization (optimized for minimal overhead)
+// Vector Normalization
 // ============================================================================
 
 #[wasm_bindgen]
@@ -290,42 +212,22 @@ pub fn normalize_vectors(embeddings_flat: &[f32], n_samples: usize, n_features: 
 
     for i in 0..n_samples {
         let offset = i * n_features;
-        let input_slice = &embeddings_flat[offset..offset + n_features];
-        let output_slice = &mut normalized[offset..offset + n_features];
 
-        // Calculate magnitude with SIMD-friendly loop
+        // Calculate magnitude
         let mut sum_sq = 0.0f32;
-        let chunks = n_features / 4;
-
-        for k in 0..chunks {
-            let idx = k * 4;
-            sum_sq += input_slice[idx] * input_slice[idx];
-            sum_sq += input_slice[idx + 1] * input_slice[idx + 1];
-            sum_sq += input_slice[idx + 2] * input_slice[idx + 2];
-            sum_sq += input_slice[idx + 3] * input_slice[idx + 3];
-        }
-
-        for k in (chunks * 4)..n_features {
-            sum_sq += input_slice[k] * input_slice[k];
+        for j in 0..n_features {
+            let val = embeddings_flat[offset + j];
+            sum_sq += val * val;
         }
 
         if sum_sq == 0.0 {
+            // Zero vector stays zero
             continue;
         }
 
         let inv_mag = 1.0 / sum_sq.sqrt();
-
-        // Normalize with vectorized operations
-        for k in 0..chunks {
-            let idx = k * 4;
-            output_slice[idx] = input_slice[idx] * inv_mag;
-            output_slice[idx + 1] = input_slice[idx + 1] * inv_mag;
-            output_slice[idx + 2] = input_slice[idx + 2] * inv_mag;
-            output_slice[idx + 3] = input_slice[idx + 3] * inv_mag;
-        }
-
-        for k in (chunks * 4)..n_features {
-            output_slice[k] = input_slice[k] * inv_mag;
+        for j in 0..n_features {
+            normalized[offset + j] = embeddings_flat[offset + j] * inv_mag;
         }
     }
 
@@ -333,7 +235,7 @@ pub fn normalize_vectors(embeddings_flat: &[f32], n_samples: usize, n_features: 
 }
 
 // ============================================================================
-// Optimized Nearest Neighbors Search
+// Nearest Neighbors Search
 // ============================================================================
 
 #[wasm_bindgen]
@@ -371,18 +273,20 @@ pub fn find_nearest_neighbors(
     }
 
     let query_offset = query_idx * n_features;
-    let query = &normalized_embeddings[query_offset..query_offset + n_features];
     let mut results: Vec<(usize, f32)> = Vec::with_capacity(n_samples - 1);
 
-    // Calculate cosine distances with optimized dot products
+    // Calculate cosine distances (using normalized vectors, so just 1 - dot product)
     for i in 0..n_samples {
         if i == query_idx {
             continue;
         }
 
         let offset = i * n_features;
-        let vec = &normalized_embeddings[offset..offset + n_features];
-        let dot = dot_product_simd(query, vec);
+        let mut dot = 0.0f32;
+        for j in 0..n_features {
+            dot += normalized_embeddings[query_offset + j] * normalized_embeddings[offset + j];
+        }
+
         let distance = 1.0 - dot;
         results.push((i, distance));
     }
@@ -400,7 +304,7 @@ pub fn find_nearest_neighbors(
 }
 
 // ============================================================================
-// JavaScript-friendly wrappers (minimized data copying)
+// JavaScript-friendly wrappers
 // ============================================================================
 
 #[wasm_bindgen]
@@ -448,4 +352,3 @@ pub fn neighbors_from_js(
     js_sys::Reflect::set(&obj, &"distances".into(), &Float32Array::from(&result.distances[..])).unwrap();
     obj.into()
 }
-

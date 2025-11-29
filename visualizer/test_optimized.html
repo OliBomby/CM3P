@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Optimized WASM Performance Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #0a0a0a; color: #0f0; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: #0ff; text-align: center; }
+        .test-section { margin: 20px 0; padding: 20px; background: #1a1a1a; border: 1px solid #0f0; }
+        .result { padding: 5px; margin: 5px 0; }
+        .faster { color: #0f0; font-weight: bold; }
+        .slower { color: #f00; }
+        .log { background: #000; padding: 10px; font-size: 12px; max-height: 400px; overflow-y: auto; border: 1px solid #0f0; }
+        button { background: #0f0; color: #000; border: none; padding: 10px 20px;
+                 cursor: pointer; margin: 5px; font-weight: bold; }
+        button:hover { background: #0ff; }
+        input[type="file"] { color: #0f0; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { padding: 8px; text-align: left; border: 1px solid #0f0; }
+        th { background: #1a1a1a; color: #0ff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 OPTIMIZED WASM PERFORMANCE TEST 🚀</h1>
+
+        <div class="test-section">
+            <h2>Load Your Parquet File</h2>
+            <input type="file" id="file-input" accept=".parquet">
+            <button id="run-test">RUN PERFORMANCE TEST</button>
+            <p style="color: #ff0;">File: C:\Users\Olivier\Documents\GitHub\CM3P\saved_logs\embeddings\beatmap_embeddings_rich.parquet</p>
+        </div>
+
+        <div class="test-section">
+            <h2>Results</h2>
+            <table id="results-table">
+                <thead>
+                    <tr>
+                        <th>Operation</th>
+                        <th>WASM Time (ms)</th>
+                        <th>Previous WASM (ms)</th>
+                        <th>Improvement</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="results-body">
+                </tbody>
+            </table>
+        </div>
+
+        <div class="test-section">
+            <h2>Detailed Log</h2>
+            <div id="log" class="log"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import {parquetRead} from 'https://cdn.jsdelivr.net/npm/hyparquet@1.22.1/+esm';
+        import {compressors} from 'https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.1/+esm';
+        import init, {
+            pca_from_js,
+            kmeans_from_js,
+            normalize_from_js
+        } from './wasm/pkg/embeddings_wasm.js';
+
+        const log = document.getElementById('log');
+        const resultsBody = document.getElementById('results-body');
+
+        // Previous WASM performance (from your output)
+        const previousPerf = {
+            pca: 26421.00,
+            kmeans: 29519.00,
+            normalize: 1673.00
+        };
+
+        function addLog(msg) {
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += `[${timestamp}] ${msg}<br>`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function addResult(operation, newTime, oldTime, status) {
+            const improvement = oldTime / newTime;
+            const color = improvement > 1.0 ? 'faster' : 'slower';
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${operation}</td>
+                <td>${newTime.toFixed(2)}</td>
+                <td>${oldTime.toFixed(2)}</td>
+                <td class="${color}">${improvement.toFixed(2)}x ${improvement > 1.0 ? 'FASTER' : 'SLOWER'}</td>
+                <td>${status}</td>
+            `;
+            resultsBody.appendChild(row);
+        }
+
+        function flattenEmbeddings(embeddings) {
+            const n = embeddings.length;
+            const dims = embeddings[0].length;
+            const flat = new Float32Array(n * dims);
+            for (let i = 0; i < n; i++) {
+                for (let j = 0; j < dims; j++) {
+                    flat[i * dims + j] = embeddings[i][j];
+                }
+            }
+            return { flat, n, dims };
+        }
+
+        async function runPerformanceTest(embeddings) {
+            const n = embeddings.length;
+            const dims = embeddings[0].length;
+
+            addLog(`========================================`);
+            addLog(`Testing with ${n} samples, ${dims} dimensions`);
+            addLog(`Total data: ${(n * dims * 4 / 1024 / 1024).toFixed(2)} MB`);
+            addLog(`========================================`);
+
+            const { flat } = flattenEmbeddings(embeddings);
+
+            // Test 1: PCA (most expensive operation)
+            addLog('');
+            addLog('🔄 Testing PCA...');
+            const t0_pca = performance.now();
+            const pca_result = pca_from_js(flat, n, dims);
+            const t1_pca = performance.now();
+            const pca_time = t1_pca - t0_pca;
+            addLog(`✅ PCA: ${pca_time.toFixed(2)}ms`);
+            addLog(`   Previous: ${previousPerf.pca.toFixed(2)}ms`);
+            addLog(`   Improvement: ${(previousPerf.pca / pca_time).toFixed(2)}x`);
+            addResult('PCA', pca_time, previousPerf.pca, '✅');
+
+            // Test 2: K-Means
+            addLog('');
+            addLog('🔄 Testing K-Means (k=10)...');
+            const t0_kmeans = performance.now();
+            const kmeans_result = kmeans_from_js(flat, n, dims, 10);
+            const t1_kmeans = performance.now();
+            const kmeans_time = t1_kmeans - t0_kmeans;
+            addLog(`✅ K-Means: ${kmeans_time.toFixed(2)}ms`);
+            addLog(`   Previous: ${previousPerf.kmeans.toFixed(2)}ms`);
+            addLog(`   Improvement: ${(previousPerf.kmeans / kmeans_time).toFixed(2)}x`);
+            addResult('K-Means (k=10)', kmeans_time, previousPerf.kmeans, '✅');
+
+            // Test 3: Normalization
+            addLog('');
+            addLog('🔄 Testing Normalization...');
+            const t0_norm = performance.now();
+            const normalized = normalize_from_js(flat, n, dims);
+            const t1_norm = performance.now();
+            const norm_time = t1_norm - t0_norm;
+            addLog(`✅ Normalization: ${norm_time.toFixed(2)}ms`);
+            addLog(`   Previous: ${previousPerf.normalize.toFixed(2)}ms`);
+            addLog(`   Improvement: ${(previousPerf.normalize / norm_time).toFixed(2)}x`);
+            addResult('Normalize', norm_time, previousPerf.normalize, '✅');
+
+            // Test 4: Run multiple K-Means iterations like your app
+            addLog('');
+            addLog('🔄 Testing K-Means (k=10) - Run 2...');
+            const t0_kmeans2 = performance.now();
+            kmeans_from_js(flat, n, dims, 10);
+            const t1_kmeans2 = performance.now();
+            const kmeans_time2 = t1_kmeans2 - t0_kmeans2;
+            addLog(`✅ K-Means Run 2: ${kmeans_time2.toFixed(2)}ms`);
+
+            addLog('');
+            addLog('========================================');
+            addLog('🎉 ALL TESTS COMPLETE! 🎉');
+            addLog('========================================');
+
+            const totalNew = pca_time + kmeans_time + norm_time;
+            const totalOld = previousPerf.pca + previousPerf.kmeans + previousPerf.normalize;
+            addLog(`Total time: ${totalNew.toFixed(2)}ms (was ${totalOld.toFixed(2)}ms)`);
+            addLog(`Overall speedup: ${(totalOld / totalNew).toFixed(2)}x`);
+        }
+
+        // Initialize WASM
+        addLog('Initializing optimized WASM module...');
+        init().then(() => {
+            addLog('✅ WASM module loaded successfully!');
+            addLog('Ready to test. Please load your parquet file.');
+        }).catch(err => {
+            addLog('❌ Error loading WASM: ' + err.message);
+        });
+
+        document.getElementById('run-test').addEventListener('click', async () => {
+            const fileInput = document.getElementById('file-input');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('Please select a parquet file first');
+                return;
+            }
+
+            addLog('');
+            addLog(`📂 Loading file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
+            const buffer = await file.arrayBuffer();
+
+            await parquetRead({
+                file: buffer,
+                rowFormat: 'object',
+                compressors: compressors,
+                onComplete: (rows) => {
+                    addLog(`✅ Loaded ${rows.length} rows`);
+
+                    // Extract embeddings
+                    const embeddings = [];
+                    for (const row of rows) {
+                        if (row.embedding && Array.isArray(row.embedding)) {
+                            embeddings.push(row.embedding);
+                        }
+                    }
+
+                    addLog(`✅ Extracted ${embeddings.length} valid embeddings`);
+
+                    if (embeddings.length === 0) {
+                        addLog('❌ No valid embeddings found');
+                        return;
+                    }
+
+                    runPerformanceTest(embeddings);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
+

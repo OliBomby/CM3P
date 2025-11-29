@@ -20,4 +20,15 @@ wasm-bindgen-test = "0.3"
 opt-level = 3
 lto = true
 codegen-units = 1
+panic = "abort"
 
+[profile.release.package."*"]
+opt-level = 3
+
+# Enable SIMD and aggressive optimizations
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", features = [] }
+
+# Build flags for SIMD
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O4", "--enable-simd"]

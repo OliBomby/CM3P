@@ -1,12 +1,15 @@
 import {parquetRead} from 'https://cdn.jsdelivr.net/npm/hyparquet@1.22.1/+esm';
 import {compressors} from 'https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.1/+esm';
 import {UMAP} from 'https://cdn.jsdelivr.net/npm/umap-js@1.3.3/+esm';
+import {WorkerPool} from './worker_pool.js';
 
 // ============================================================================
-// WASM Module Loading
+// WASM Module Loading + Parallel Worker Pool
 // ============================================================================
 let wasmModule = null;
 let useWasm = false;
+let workerPool = null;
+let useParallel = true;
 
 async function initWasm() {
     try {
@@ -23,8 +26,23 @@ async function initWasm() {
     }
 }
 
-// Initialize WASM on worker startup
-initWasm();
+async function initWorkerPool() {
+    try {
+        workerPool = new WorkerPool();
+        await workerPool.ready();
+        console.log('Worker pool initialized for parallel processing');
+        self.postMessage({type: 'PARALLEL_STATUS', loaded: true});
+    } catch (err) {
+        console.warn('Worker pool not available:', err);
+        useParallel = false;
+        self.postMessage({type: 'PARALLEL_STATUS', loaded: false});
+    }
+}
+
+// Initialize both on worker startup
+Promise.all([initWasm(), initWorkerPool()]).then(() => {
+    console.log('All optimizations loaded');
+});
 
 // ============================================================================
 // JavaScript Fallback Implementations
@@ -176,9 +194,18 @@ function calculatePCA(embeddings) {
     return result;
 }
 
-function calculateKMeans(embeddings, k) {
+async function calculateKMeans(embeddings, k) {
     const t0 = performance.now();
     let result;
+
+    // Use parallel processing if worker pool is available
+    if (useParallel && workerPool) {
+        const { flat, n, dims } = flattenEmbeddings(embeddings);
+        result = await workerPool.kmeans(flat, n, dims, k, 5);
+        const t1 = performance.now();
+        console.log(`K-Means (PARALLEL): ${(t1 - t0).toFixed(2)}ms`);
+        return result;
+    }
 
     if (useWasm && wasmModule) {
         const { flat, n, dims } = flattenEmbeddings(embeddings);
@@ -469,7 +496,7 @@ self.onmessage = async (e) => {
                 file: payload,
                 rowFormat: 'object',
                 compressors: compressors,
-                onComplete: (rows) => {
+                onComplete: async (rows) => {
                     const totalRows = rows.length;
                     const colNames = Object.keys(rows[0] ?? {});
 
@@ -497,7 +524,7 @@ self.onmessage = async (e) => {
                     currentCoords = calculatePCA(embeddings);
 
                     self.postMessage({type: 'STATUS', msg: 'Running K-Means clustering...'});
-                    const clusters = calculateKMeans(embeddings, 10);
+                    const clusters = await calculateKMeans(embeddings, 10);
 
                     filteredIndices = fullData.map((_, i) => i);
                     currentEmbeddings = embeddings;
@@ -558,7 +585,7 @@ self.onmessage = async (e) => {
             }
 
             self.postMessage({type: 'STATUS', msg: 'Running K-Means clustering...'});
-            const clusters = calculateKMeans(newEmbeddings, k);
+            const clusters = await calculateKMeans(newEmbeddings, k);
 
             filteredIndices = newIndices;
             currentEmbeddings = newEmbeddings;
@@ -584,7 +611,7 @@ self.onmessage = async (e) => {
     }
 
     if (type === 'RECLUSTER') {
-        const clusters = calculateKMeans(currentEmbeddings, payload.k);
+        const clusters = await calculateKMeans(currentEmbeddings, payload.k);
         self.postMessage({type: 'CLUSTERS_UPDATED', clusters: clusters});
     }
 
@@ -644,4 +671,3 @@ self.onmessage = async (e) => {
         self.postMessage({type: 'SEARCH_RESULTS', indices: matches});
     }
 };
-

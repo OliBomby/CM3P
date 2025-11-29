@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>osu! Embedding Visualizer v2</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400&display=swap"
+        rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body>
+
+<div id="loading-overlay" class="visible">
+  <div class="loader-content">
+    <div class="spinner"></div>
+    <h2 id="loading-text">Waiting for Parquet file...</h2>
+    <div id="loading-subtext">Calculations run locally in your browser.</div>
+    <br>
+    <label for="parquet-upload" class="btn-primary" style="display:inline-block; width:auto; padding: 10px 30px;">
+      Select File
+    </label>
+  </div>
+</div>
+
+<div class="app-container">
+
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h3>osu! Map Explorer</h3>
+      <div class="file-upload-wrapper">
+        <input type="file" id="parquet-upload" accept=".parquet">
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label>Filter / Search Query</label>
+      <div class="smart-input-container">
+        <input type="text" id="filter-input" placeholder="mode='osu' difficulty>=5" autocomplete="off">
+        <div class="suggestions-box" id="filter-suggestions"></div>
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="control-group">
+      <label>Projection Method</label>
+      <select id="projection-select"
+              style="width:100%; padding:5px; background:#2d2d2d; color:white; border:1px solid #333;">
+        <option value="PCA">PCA (Fastest)</option>
+        <option value="UMAP">UMAP (Slower, Better Structure)</option>
+        <option value="TSNE">t-SNE (Very Slow)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label>Color By</label>
+      <select id="color-select"
+              style="width:100%; padding:5px; background:#2d2d2d; color:white; border:1px solid #333;">
+        <option value="cluster">Cluster (K-Means)</option>
+        <option value="Artist">Artist</option>
+        <option value="Creator">Creator</option>
+        <option value="Mode">Game Mode</option>
+        <option value="RankedStatus">Ranked Status</option>
+        <option value="Difficulty">Difficulty</option>
+        <option value="none">None (Blue)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label>View Mode</label>
+      <div class="radio-group">
+        <label><input type="radio" name="viewmode" value="scatter" checked> Scatter</label>
+        <label><input type="radio" name="viewmode" value="density"> Density (Hexbin)</label>
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="control-group">
+      <label>K-Means Clusters: <span id="k-value-display">10</span></label>
+      <input type="range" id="k-slider" min="2" max="20" value="10">
+    </div>
+
+    <div class="control-group">
+      <label>Neighbor Count: <span id="n-value-display">10</span></label>
+      <input type="range" id="n-slider" min="1" max="50" value="10">
+    </div>
+
+    <hr>
+
+    <div class="control-group">
+      <label>Highlight Search</label>
+      <div class="smart-input-container">
+        <input type="text" id="search-input" autocomplete="off">
+      </div>
+    </div>
+
+    <button id="btn-export" class="btn-primary" style="background:#4CAF50; margin-bottom:10px;">Export CSV</button>
+
+    <div class="details-panel" id="details-panel">
+      <div class="empty-state">Select a point to view details</div>
+    </div>
+
+    <div class="neighbors-panel">
+      <h4>Nearest Neighbors</h4>
+      <ul id="neighbors-list"></ul>
+    </div>
+  </aside>
+
+  <main class="viz-area">
+    <div id="plotly-div"></div>
+    <div id="custom-tooltip"></div>
+  </main>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

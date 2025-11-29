@@ -574,7 +574,7 @@ self.onmessage = async (e) => {
 
             let coords;
             if (method === 'UMAP' || method === 'TSNE') {
-                if (newIndices.length > 5000) {
+                if (newIndices.length > 50000) {
                     self.postMessage({type: 'STATUS', msg: 'Dataset too large for UMAP (Limit 5k). Using PCA.'});
                     coords = calculatePCA(newEmbeddings);
                 } else {

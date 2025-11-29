@@ -292,11 +292,7 @@ class BeatmapDatasetIterable:
             result = {key: results[key][i] for key in results}
 
             if self.args.include_source_metadata:
-                # Add beatmap identification and metadata fields for downstream aggregation
+                # Add beatmap identification for downstream aggregation
                 result['beatmap_id'] = beatmap_metadata.name
-                result['artist'] = beatmap_metadata.get('Artist', 'None')
-                result['title'] = beatmap_metadata.get('Title', 'None')
-                result['creator'] = beatmap_metadata.get('Creator', 'None')
-                result['version'] = beatmap_metadata.get('Version', 'None')
 
             yield result

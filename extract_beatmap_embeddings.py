@@ -67,6 +67,7 @@ def main(args: TrainConfig):
         max_difficulty=args.dataset.max_difficulty,
     )
 
+    # metadata index is MultiIndex [BeatmapSetId, Id]; ensure dynamic maps derive from filtered metadata
     if args.processor.metadata_tokenizer.modes is None:
         args.processor.metadata_tokenizer.modes = metadata.reset_index().set_index(["ModeInt"])["Mode"].to_dict()
     if args.processor.metadata_tokenizer.statuses is None:
@@ -120,7 +121,7 @@ def main(args: TrainConfig):
 
     # Accumulators for embeddings per beatmap
     embed_accumulator: dict[int, dict[str, any]] = {}
-    # Structure: beatmap_id -> { 'sum': np.ndarray, 'count': int, 'artist': str, 'title': str, 'creator': str, 'version': str }
+    # Structure: beatmap_id -> { 'sum': np.ndarray, 'count': int }
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Extracting beatmap embeddings", smoothing=0.01, total=est_batches):
@@ -150,22 +151,6 @@ def main(args: TrainConfig):
             if torch.is_tensor(beatmap_ids):
                 beatmap_ids = beatmap_ids.tolist()
 
-            artists = batch.get("artist", [None] * len(beatmap_ids))
-            titles = batch.get("title", [None] * len(beatmap_ids))
-            creators = batch.get("creator", [None] * len(beatmap_ids))
-            versions = batch.get("version", [None] * len(beatmap_ids))
-
-            # Ensure Python lists for string fields (DataLoader collates them as lists already; tensors unlikely)
-            def to_list(x):
-                if torch.is_tensor(x):
-                    return x.tolist()
-                return list(x)
-
-            artists = to_list(artists)
-            titles = to_list(titles)
-            creators = to_list(creators)
-            versions = to_list(versions)
-
             for i, bid in enumerate(beatmap_ids):
                 if bid is None:
                     continue
@@ -173,16 +158,12 @@ def main(args: TrainConfig):
                     embed_accumulator[bid] = {
                         'sum': embeds[i].copy(),
                         'count': 1,
-                        'artist': artists[i],
-                        'title': titles[i],
-                        'creator': creators[i],
-                        'version': versions[i],
                     }
                 else:
                     embed_accumulator[bid]['sum'] += embeds[i]
                     embed_accumulator[bid]['count'] += 1
 
-    # Build DataFrame of mean embeddings
+    # Build DataFrame of mean embeddings keyed by beatmap_id
     rows = []
     for bid, info in embed_accumulator.items():
         mean_vec = info['sum'] / info['count']
@@ -191,18 +172,29 @@ def main(args: TrainConfig):
         if norm > 0:
             mean_vec = mean_vec / norm
         rows.append({
-            'beatmap_id': bid,
-            'artist': info['artist'],
-            'title': info['title'],
-            'creator': info['creator'],
-            'version': info['version'],
+            'beatmap_id': int(bid),
             'embedding': mean_vec.tolist(),
         })
 
-    df = pd.DataFrame(rows)
+    embeddings_df = pd.DataFrame(rows)
+
+    # Merge embeddings with full metadata (which has MultiIndex [BeatmapSetId, Id])
+    meta_df = metadata.reset_index()  # brings BeatmapSetId and Id into columns
+    # Ensure the Id column is int for a robust merge
+    if meta_df['Id'].dtype != 'int64' and meta_df['Id'].dtype != 'int32':
+        meta_df['Id'] = meta_df['Id'].astype(int)
+    merged_df = embeddings_df.merge(meta_df, left_on='beatmap_id', right_on='Id', how='left')
+
+    # Reorder columns to put embedding at the end, keeping all original metadata columns
+    cols = ['Artist', 'ArtistUnicode', 'Creator', 'FavouriteCount', 'BeatmapSetId', 'Nsfw', 'Offset', 'BeatmapSetPlayCount', 'Source', 'BeatmapSetStatus', 'Spotlight', 'Title', 'TitleUnicode', 'BeatmapSetUserId', 'Video', 'Description', 'GenreId', 'GenreName', 'LanguageId', 'LanguageName', 'PackTags', 'Ratings', 'DownloadDisabled', 'BeatmapSetBpm', 'CanBeHyped', 'DiscussionLocked', 'BeatmapSetIsScoreable', 'BeatmapSetLastUpdated', 'BeatmapSetRanked', 'RankedDate', 'Storyboard', 'SubmittedDate', 'Tags', 'DifficultyRating', 'Id', 'Mode', 'Status', 'TotalLength', 'UserId', 'Version', 'Checksum', 'MaxCombo', 'Accuracy', 'Ar', 'Bpm', 'CountCircles', 'CountSliders', 'CountSpinners', 'Cs', 'Drain', 'HitLength', 'IsScoreable', 'LastUpdated', 'ModeInt', 'PassCount', 'PlayCount', 'Ranked', 'Owners', 'TopTagIds', 'TopTagCounts', 'StarRating', 'OmdbTags', 'AudioFile', 'BeatmapSetFolder', 'BeatmapFile', 'embedding']
+    merged_df = merged_df[cols]
+
     output_path = Path("beatmap_embeddings.parquet")
-    df.to_parquet(output_path, index=False)
-    logger.info(f"Saved {len(df)} beatmap embeddings to {output_path.resolve()}")
+    merged_df.to_parquet(output_path, index=False)
+    logger.info(f"Final DataFrame has {merged_df.shape[0]} rows.")
+    logger.info(f"Final DataFrame has {merged_df.shape[1]} columns.")
+    logger.info(f"Columns: {merged_df.columns.tolist()}")
+    logger.info(f"Saved {len(merged_df)} beatmap embeddings to {output_path.resolve()}")
 
 
 if __name__ == "__main__":

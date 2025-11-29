@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WASM vs JS Benchmark</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #1a1a1a; color: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #3498db; }
+        .benchmark-section { margin: 20px 0; padding: 20px; background: #2a2a2a; border-radius: 8px; }
+        .results { margin-top: 10px; }
+        .result-row { display: flex; justify-content: space-between; padding: 8px; border-bottom: 1px solid #444; }
+        .faster { color: #2ecc71; font-weight: bold; }
+        .slower { color: #e74c3c; }
+        button { background: #3498db; color: white; border: none; padding: 10px 20px;
+                 border-radius: 5px; cursor: pointer; margin: 5px; }
+        button:hover { background: #2980b9; }
+        button:disabled { background: #7f8c8d; cursor: not-allowed; }
+        .progress { margin: 10px 0; }
+        .log { background: #000; padding: 10px; border-radius: 5px; font-family: monospace;
+               font-size: 12px; max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WASM vs JavaScript Performance Benchmark</h1>
+
+        <div class="benchmark-section">
+            <h2>Setup</h2>
+            <label>
+                Dataset Size:
+                <select id="dataset-size">
+                    <option value="1000">1,000 samples</option>
+                    <option value="5000">5,000 samples</option>
+                    <option value="10000" selected>10,000 samples</option>
+                    <option value="50000">50,000 samples</option>
+                    <option value="100000">100,000 samples</option>
+                </select>
+            </label>
+            <label style="margin-left: 20px;">
+                Embedding Dimensions:
+                <select id="embedding-dims">
+                    <option value="64">64</option>
+                    <option value="128" selected>128</option>
+                    <option value="256">256</option>
+                    <option value="512">512</option>
+                </select>
+            </label>
+            <br><br>
+            <button id="run-all">Run All Benchmarks</button>
+            <button id="run-pca">Benchmark PCA</button>
+            <button id="run-kmeans">Benchmark K-Means</button>
+            <button id="run-normalize">Benchmark Normalize</button>
+            <button id="run-neighbors">Benchmark Neighbors</button>
+        </div>
+
+        <div class="benchmark-section">
+            <h2>Results</h2>
+            <div id="results" class="results"></div>
+        </div>
+
+        <div class="benchmark-section">
+            <h2>Log</h2>
+            <div id="log" class="log"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import init, {
+            pca_from_js,
+            kmeans_from_js,
+            normalize_from_js,
+            neighbors_from_js
+        } from './wasm/pkg/embeddings_wasm.js';
+
+        // JavaScript implementations (from worker.js)
+        function calculatePCA_JS(embeddings, n, dims) {
+            if (n === 0) return new Float32Array(0);
+            const mean = new Float32Array(dims);
+            for (let i = 0; i < n; i++) {
+                const offset = i * dims;
+                for (let j = 0; j < dims; j++) mean[j] += embeddings[offset + j];
+            }
+            for (let j = 0; j < dims; j++) mean[j] /= n;
+
+            const getCentered = (i, j) => embeddings[i * dims + j] - mean[j];
+            const components = [];
+
+            for (let c = 0; c < 2; c++) {
+                let ev = new Float32Array(dims).map(() => Math.random() - 0.5);
+                let mag = Math.sqrt(ev.reduce((a, b) => a + b * b, 0));
+                ev = ev.map(x => x / mag);
+
+                for (let iter = 0; iter < 8; iter++) {
+                    const scores = new Float32Array(n);
+                    for (let i = 0; i < n; i++) {
+                        let s = 0;
+                        for (let j = 0; j < dims; j++) s += getCentered(i, j) * ev[j];
+                        scores[i] = s;
+                    }
+                    const next_ev = new Float32Array(dims);
+                    for (let j = 0; j < dims; j++) {
+                        let s = 0;
+                        for (let i = 0; i < n; i++) s += scores[i] * getCentered(i, j);
+                        next_ev[j] = s;
+                    }
+                    mag = Math.sqrt(next_ev.reduce((a, b) => a + b * b, 0));
+                    if (mag > 0) ev = next_ev.map(x => x / mag);
+                }
+                if (c === 1) {
+                    const u = components[0];
+                    let dot = 0;
+                    for (let k = 0; k < dims; k++) dot += u[k] * ev[k];
+                    for (let k = 0; k < dims; k++) ev[k] -= dot * u[k];
+                    const mag2 = Math.sqrt(ev.reduce((a, b) => a + b * b, 0));
+                    ev = ev.map(x => x / mag2);
+                }
+                components.push(ev);
+            }
+
+            const projected = new Float32Array(n * 2);
+            for (let i = 0; i < n; i++) {
+                let x = 0, y = 0;
+                for (let j = 0; j < dims; j++) {
+                    const val = getCentered(i, j);
+                    x += val * components[0][j];
+                    y += val * components[1][j];
+                }
+                projected[i * 2] = x;
+                projected[i * 2 + 1] = y;
+            }
+            return projected;
+        }
+
+        function calculateKMeans_JS(embeddings, n, dims, k) {
+            if (n === 0 || k === 0) return new Int8Array(0);
+            let centroids = [];
+            for (let i = 0; i < k; i++) centroids.push(embeddings.slice(Math.floor(Math.random() * n) * dims, (Math.floor(Math.random() * n) + 1) * dims));
+
+            let labels = new Int8Array(n);
+            for (let iter = 0; iter < 5; iter++) {
+                const sums = Array(k).fill(0).map(() => new Float32Array(dims));
+                const counts = new Int32Array(k);
+
+                for (let i = 0; i < n; i++) {
+                    let minD = Infinity, best = 0;
+                    for (let c = 0; c < k; c++) {
+                        let d = 0;
+                        for (let j = 0; j < dims; j++) {
+                            let diff = embeddings[i * dims + j] - centroids[c][j];
+                            d += diff * diff;
+                        }
+                        if (d < minD) { minD = d; best = c; }
+                    }
+                    labels[i] = best;
+                    counts[best]++;
+                    for (let j = 0; j < dims; j++) sums[best][j] += embeddings[i * dims + j];
+                }
+                for (let c = 0; c < k; c++) {
+                    if (counts[c]) {
+                        for (let j = 0; j < dims; j++) centroids[c][j] = sums[c][j] / counts[c];
+                    }
+                }
+            }
+            return labels;
+        }
+
+        function normalize_JS(embeddings, n, dims) {
+            const normalized = new Float32Array(n * dims);
+            for (let i = 0; i < n; i++) {
+                const offset = i * dims;
+                let sumSq = 0;
+                for (let j = 0; j < dims; j++) {
+                    const val = embeddings[offset + j];
+                    sumSq += val * val;
+                }
+                if (sumSq === 0) continue;
+                const inv = 1 / Math.sqrt(sumSq);
+                for (let j = 0; j < dims; j++) {
+                    normalized[offset + j] = embeddings[offset + j] * inv;
+                }
+            }
+            return normalized;
+        }
+
+        function findNeighbors_JS(normalized, n, dims, queryIdx, k) {
+            if (queryIdx >= n) return { indices: [], distances: [] };
+            const queryOffset = queryIdx * dims;
+            const results = [];
+
+            for (let i = 0; i < n; i++) {
+                if (i === queryIdx) continue;
+                const offset = i * dims;
+                let dot = 0;
+                for (let j = 0; j < dims; j++) {
+                    dot += normalized[queryOffset + j] * normalized[offset + j];
+                }
+                const distance = 1.0 - dot;
+                results.push({ idx: i, dist: distance });
+            }
+
+            results.sort((a, b) => a.dist - b.dist);
+            return {
+                indices: results.slice(0, k).map(r => r.idx),
+                distances: results.slice(0, k).map(r => r.dist)
+            };
+        }
+
+        const log = document.getElementById('log');
+        const results = document.getElementById('results');
+
+        function addLog(msg) {
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += `[${timestamp}] ${msg}<br>`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function addResult(name, jsTime, wasmTime) {
+            const speedup = (jsTime / wasmTime).toFixed(2);
+            const faster = wasmTime < jsTime;
+            const html = `
+                <div class="result-row">
+                    <span>${name}</span>
+                    <span>JS: ${jsTime.toFixed(2)}ms</span>
+                    <span>WASM: ${wasmTime.toFixed(2)}ms</span>
+                    <span class="${faster ? 'faster' : 'slower'}">${speedup}x ${faster ? 'faster' : 'slower'}</span>
+                </div>
+            `;
+            results.innerHTML += html;
+        }
+
+        function generateTestData(n, dims) {
+            const data = new Float32Array(n * dims);
+            for (let i = 0; i < n * dims; i++) {
+                data[i] = Math.random() * 10 - 5;
+            }
+            return data;
+        }
+
+        async function benchmark(name, jsFn, wasmFn, ...args) {
+            addLog(`Starting ${name}...`);
+
+            // Warmup
+            jsFn(...args);
+            wasmFn(...args);
+
+            // JavaScript benchmark
+            const jsStart = performance.now();
+            jsFn(...args);
+            const jsTime = performance.now() - jsStart;
+
+            // WASM benchmark
+            const wasmStart = performance.now();
+            wasmFn(...args);
+            const wasmTime = performance.now() - wasmStart;
+
+            addResult(name, jsTime, wasmTime);
+            addLog(`${name} complete: JS=${jsTime.toFixed(2)}ms, WASM=${wasmTime.toFixed(2)}ms, Speedup=${(jsTime/wasmTime).toFixed(2)}x`);
+        }
+
+        async function runBenchmarks() {
+            const n = parseInt(document.getElementById('dataset-size').value);
+            const dims = parseInt(document.getElementById('embedding-dims').value);
+
+            addLog(`Generating test data: ${n} samples, ${dims} dimensions...`);
+            const embeddings = generateTestData(n, dims);
+            const embeddingsJS = Float32Array.from(embeddings);
+
+            results.innerHTML = '<h3>Performance Comparison</h3>';
+
+            if (document.getElementById('run-pca').disabled === false || event.target.id === 'run-all') {
+                await benchmark(
+                    'PCA',
+                    () => calculatePCA_JS(embeddingsJS, n, dims),
+                    () => pca_from_js(embeddings, n, dims)
+                );
+            }
+
+            if (document.getElementById('run-kmeans').disabled === false || event.target.id === 'run-all') {
+                await benchmark(
+                    'K-Means (k=10)',
+                    () => calculateKMeans_JS(embeddingsJS, n, dims, 10),
+                    () => kmeans_from_js(embeddings, n, dims, 10)
+                );
+            }
+
+            if (document.getElementById('run-normalize').disabled === false || event.target.id === 'run-all') {
+                await benchmark(
+                    'Normalize Vectors',
+                    () => normalize_JS(embeddingsJS, n, dims),
+                    () => normalize_from_js(embeddings, n, dims)
+                );
+            }
+
+            if (document.getElementById('run-neighbors').disabled === false || event.target.id === 'run-all') {
+                const normalized = normalize_from_js(embeddings, n, dims);
+                const normalizedJS = Float32Array.from(normalized);
+                await benchmark(
+                    'Find Neighbors (k=10)',
+                    () => findNeighbors_JS(normalizedJS, n, dims, 0, 10),
+                    () => neighbors_from_js(normalized, n, dims, 0, 10)
+                );
+            }
+
+            addLog('All benchmarks complete!');
+        }
+
+        // Initialize WASM
+        addLog('Loading WASM module...');
+        init().then(() => {
+            addLog('WASM module loaded successfully!');
+            document.getElementById('run-all').disabled = false;
+            document.getElementById('run-pca').disabled = false;
+            document.getElementById('run-kmeans').disabled = false;
+            document.getElementById('run-normalize').disabled = false;
+            document.getElementById('run-neighbors').disabled = false;
+        }).catch(err => {
+            addLog('Error loading WASM: ' + err.message);
+        });
+
+        document.getElementById('run-all').addEventListener('click', runBenchmarks);
+        document.getElementById('run-pca').addEventListener('click', runBenchmarks);
+        document.getElementById('run-kmeans').addEventListener('click', runBenchmarks);
+        document.getElementById('run-normalize').addEventListener('click', runBenchmarks);
+        document.getElementById('run-neighbors').addEventListener('click', runBenchmarks);
+
+        // Disable buttons until WASM loads
+        document.getElementById('run-all').disabled = true;
+        document.getElementById('run-pca').disabled = true;
+        document.getElementById('run-kmeans').disabled = true;
+        document.getElementById('run-normalize').disabled = true;
+        document.getElementById('run-neighbors').disabled = true;
+    </script>
+</body>
+</html>
+

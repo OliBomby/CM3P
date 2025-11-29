@@ -46,7 +46,7 @@ const dom = {
 };
 
 function initWorker() {
-    state.worker = new Worker(new URL('./worker.js', import.meta.url), {type: 'module'});
+    state.worker = new Worker(new URL('./worker_wasm.js', import.meta.url), {type: 'module'});
     state.worker.onmessage = handleMsg;
 }
 

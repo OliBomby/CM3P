@@ -1,0 +1,14 @@
+{
+  "name": "embeddings-wasm",
+  "version": "0.1.0",
+  "description": "High-performance WASM module for embedding calculations",
+  "scripts": {
+    "build": "wasm-pack build --target web --out-dir pkg",
+    "build:release": "wasm-pack build --target web --release --out-dir pkg",
+    "test": "wasm-pack test --node"
+  },
+  "keywords": ["wasm", "embeddings", "pca", "kmeans"],
+  "author": "",
+  "license": "MIT"
+}
+

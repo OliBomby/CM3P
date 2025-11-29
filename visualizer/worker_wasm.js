@@ -166,7 +166,7 @@ function normalize_JS(v) {
 // ============================================================================
 
 function flattenEmbeddings(embeddings) {
-    if (!embeddings || embeddings.length === 0) return { flat: new Float32Array(0), n: 0, dims: 0 };
+    if (!embeddings || embeddings.length === 0) return {flat: new Float32Array(0), n: 0, dims: 0};
     const n = embeddings.length;
     const dims = embeddings[0].length;
     const flat = new Float32Array(n * dims);
@@ -175,7 +175,7 @@ function flattenEmbeddings(embeddings) {
             flat[i * dims + j] = embeddings[i][j];
         }
     }
-    return { flat, n, dims };
+    return {flat, n, dims};
 }
 
 function calculatePCA(embeddings) {
@@ -183,7 +183,7 @@ function calculatePCA(embeddings) {
     let result;
 
     if (useWasm && wasmModule) {
-        const { flat, n, dims } = flattenEmbeddings(embeddings);
+        const {flat, n, dims} = flattenEmbeddings(embeddings);
         result = wasmModule.pca_from_js(flat, n, dims);
     } else {
         result = calculatePCA_JS(embeddings);
@@ -200,7 +200,7 @@ async function calculateKMeans(embeddings, k) {
 
     // Use parallel processing if worker pool is available
     if (useParallel && workerPool) {
-        const { flat, n, dims } = flattenEmbeddings(embeddings);
+        const {flat, n, dims} = flattenEmbeddings(embeddings);
         result = await workerPool.kmeans(flat, n, dims, k, 5);
         const t1 = performance.now();
         console.log(`K-Means (PARALLEL): ${(t1 - t0).toFixed(2)}ms`);
@@ -208,7 +208,7 @@ async function calculateKMeans(embeddings, k) {
     }
 
     if (useWasm && wasmModule) {
-        const { flat, n, dims } = flattenEmbeddings(embeddings);
+        const {flat, n, dims} = flattenEmbeddings(embeddings);
         result = wasmModule.kmeans_from_js(flat, n, dims, k);
     } else {
         result = calculateKMeans_JS(embeddings, k);
@@ -224,7 +224,7 @@ function normalizeVectors(embeddings) {
     let result;
 
     if (useWasm && wasmModule) {
-        const { flat, n, dims } = flattenEmbeddings(embeddings);
+        const {flat, n, dims} = flattenEmbeddings(embeddings);
         const normalized = wasmModule.normalize_from_js(flat, n, dims);
         // Convert back to array of arrays
         result = [];
@@ -249,7 +249,7 @@ function findNearestNeighbors(normalizedEmbeddings, queryIdx, k) {
     let results;
 
     if (useWasm && wasmModule) {
-        const { flat, n, dims } = flattenEmbeddings(normalizedEmbeddings);
+        const {flat, n, dims} = flattenEmbeddings(normalizedEmbeddings);
         const neighbors = wasmModule.neighbors_from_js(flat, n, dims, queryIdx, k);
         results = [];
         for (let i = 0; i < neighbors.indices.length; i++) {
@@ -272,7 +272,7 @@ function findNearestNeighbors(normalizedEmbeddings, queryIdx, k) {
             for (let j = 0; j < vec.length; j++) dot += targetNorm[j] * vec[j];
             const sim = dot;
             const dist = 1 - sim;
-            results.push({ subsetIndex: i, sim, dist });
+            results.push({subsetIndex: i, sim, dist});
         }
         results.sort((a, b) => a.dist - b.dist);
         results = results.slice(0, k);
@@ -340,16 +340,38 @@ const FLOAT_TOL = 0.01;
 function splitTokens(input) {
     const s = String(input || '').trim();
     const tokens = [];
-    let buf = ''; let inQ = false; let qChar = '';
+    let buf = '';
+    let inQ = false;
+    let qChar = '';
     for (let i = 0; i < s.length; i++) {
         const ch = s[i];
         if (inQ) {
-            if (ch === qChar) { inQ = false; buf += ch; continue; }
-            if (ch === '\\' && s[i + 1] === qChar) { buf += qChar; i++; continue; }
-            buf += ch; continue;
+            if (ch === qChar) {
+                inQ = false;
+                buf += ch;
+                continue;
+            }
+            if (ch === '\\' && s[i + 1] === qChar) {
+                buf += qChar;
+                i++;
+                continue;
+            }
+            buf += ch;
+            continue;
         } else {
-            if (ch === '"' || ch === '\'') { inQ = true; qChar = ch; buf += ch; continue; }
-            if (ch === ' ') { if (buf.trim().length) { tokens.push(buf.trim()); } buf = ''; continue; }
+            if (ch === '"' || ch === '\'') {
+                inQ = true;
+                qChar = ch;
+                buf += ch;
+                continue;
+            }
+            if (ch === ' ') {
+                if (buf.trim().length) {
+                    tokens.push(buf.trim());
+                }
+                buf = '';
+                continue;
+            }
             buf += ch;
         }
     }
@@ -358,21 +380,39 @@ function splitTokens(input) {
 }
 
 function parseToken(token) {
-    let inQ = false; let qChar = '';
-    let opPos = -1; let opFound = '';
+    let inQ = false;
+    let qChar = '';
+    let opPos = -1;
+    let opFound = '';
     for (let i = 0; i < token.length; i++) {
         const ch = token[i];
         if (inQ) {
             if (ch === qChar) inQ = false;
-            if (ch === '\\' && token[i + 1] === qChar) { i++; continue; }
+            if (ch === '\\' && token[i + 1] === qChar) {
+                i++;
+                continue;
+            }
             continue;
         } else {
-            if (ch === '"' || ch === '\'') { inQ = true; qChar = ch; continue; }
+            if (ch === '"' || ch === '\'') {
+                inQ = true;
+                qChar = ch;
+                continue;
+            }
             for (const op of ['!=', '<=', '>=']) {
-                if (token.startsWith(op, i)) { opPos = i; opFound = op; i += op.length - 1; break; }
+                if (token.startsWith(op, i)) {
+                    opPos = i;
+                    opFound = op;
+                    i += op.length - 1;
+                    break;
+                }
             }
             if (opPos !== -1) break;
-            if (OPS.has(ch)) { opPos = i; opFound = ch; break; }
+            if (OPS.has(ch)) {
+                opPos = i;
+                opFound = ch;
+                break;
+            }
         }
     }
     if (opPos === -1) return {type: 'value', value: unquote(token)};
@@ -424,15 +464,22 @@ function findColumnCaseInsensitive(row, col) {
 }
 
 function numericCompare(lhs, rhs, op) {
-    const ln = Number(lhs); const rn = Number(rhs);
+    const ln = Number(lhs);
+    const rn = Number(rhs);
     if (Number.isNaN(ln) || Number.isNaN(rn)) return null;
     switch (op) {
-        case '=': return Math.abs(ln - rn) <= FLOAT_TOL;
-        case '!=': return Math.abs(ln - rn) > FLOAT_TOL;
-        case '<': return ln < rn;
-        case '>': return ln > rn;
-        case '<=': return ln <= rn + FLOAT_TOL;
-        case '>=': return ln + FLOAT_TOL >= rn;
+        case '=':
+            return Math.abs(ln - rn) <= FLOAT_TOL;
+        case '!=':
+            return Math.abs(ln - rn) > FLOAT_TOL;
+        case '<':
+            return ln < rn;
+        case '>':
+            return ln > rn;
+        case '<=':
+            return ln <= rn + FLOAT_TOL;
+        case '>=':
+            return ln + FLOAT_TOL >= rn;
     }
     return false;
 }
@@ -441,12 +488,18 @@ function stringCompare(lhs, rhs, op) {
     const ls = String(lhs ?? '').toLowerCase();
     const rs = String(rhs ?? '').toLowerCase();
     switch (op) {
-        case '=': return ls.includes(rs);
-        case '!=': return !ls.includes(rs);
-        case '<': return ls < rs;
-        case '>': return ls > rs;
-        case '<=': return ls <= rs;
-        case '>=': return ls >= rs;
+        case '=':
+            return ls.includes(rs);
+        case '!=':
+            return !ls.includes(rs);
+        case '<':
+            return ls < rs;
+        case '>':
+            return ls > rs;
+        case '<=':
+            return ls <= rs;
+        case '>=':
+            return ls >= rs;
     }
     return false;
 }
@@ -470,7 +523,10 @@ function rowMatchesQuery(row, subqueries) {
             for (const key of Object.keys(row)) {
                 if (key === 'embedding') continue;
                 const txt = String(row[key] ?? '').toLowerCase();
-                if (needle && txt.includes(needle)) { found = true; break; }
+                if (needle && txt.includes(needle)) {
+                    found = true;
+                    break;
+                }
             }
             if (!found) return false;
         } else if (sq.type === 'tuple') {
@@ -506,7 +562,7 @@ self.onmessage = async (e) => {
                         const emb = r.embedding;
                         if (!emb || typeof emb.length !== 'number' || emb.length === 0) continue;
                         const idx = validRows.length;
-                        validRows.push({ originalIndex: idx, ...r });
+                        validRows.push({originalIndex: idx, ...r});
                     }
 
                     const rowCount = validRows.length;
@@ -567,7 +623,8 @@ self.onmessage = async (e) => {
                         newIndices.push(i);
                         newEmbeddings.push(fullData[i].embedding);
                     }
-                } catch (e) {}
+                } catch (e) {
+                }
             }
 
             self.postMessage({type: 'STATUS', msg: `Projecting ${newIndices.length} points (${method})...`});

@@ -12,7 +12,7 @@ class WorkerPool {
         const promises = [];
 
         for (let i = 0; i < this.numWorkers; i++) {
-            const worker = new Worker('./compute_worker.js', { type: 'module' });
+            const worker = new Worker('./compute_worker.js', {type: 'module'});
             this.workers.push(worker);
 
             promises.push(new Promise((resolve) => {
@@ -22,7 +22,7 @@ class WorkerPool {
                         resolve();
                     }
                 };
-                worker.postMessage({ type: 'INIT_WASM' });
+                worker.postMessage({type: 'INIT_WASM'});
             }));
         }
 
@@ -232,5 +232,5 @@ class WorkerPool {
     }
 }
 
-export { WorkerPool };
+export {WorkerPool};
 

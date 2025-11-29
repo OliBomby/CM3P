@@ -2,7 +2,7 @@
 // This worker receives a chunk of data and performs computations
 
 self.onmessage = async (e) => {
-    const { type, data } = e.data;
+    const {type, data} = e.data;
 
     if (type === 'INIT_WASM') {
         // Load WASM module in this worker thread
@@ -10,15 +10,15 @@ self.onmessage = async (e) => {
             const wasmModule = await import('./wasm/pkg/embeddings_wasm.js');
             await wasmModule.default();
             self.wasmModule = wasmModule;
-            self.postMessage({ type: 'READY' });
+            self.postMessage({type: 'READY'});
         } catch (err) {
-            self.postMessage({ type: 'ERROR', error: err.message });
+            self.postMessage({type: 'ERROR', error: err.message});
         }
     }
 
     if (type === 'PCA_CHUNK') {
         // Compute PCA scores for a chunk of data
-        const { embeddings_flat, n_samples, n_features, mean, eigenvector, chunk_start } = data;
+        const {embeddings_flat, n_samples, n_features, mean, eigenvector, chunk_start} = data;
         const scores = new Float32Array(n_samples);
 
         for (let i = 0; i < n_samples; i++) {
@@ -30,12 +30,12 @@ self.onmessage = async (e) => {
             scores[i] = score;
         }
 
-        self.postMessage({ type: 'PCA_CHUNK_RESULT', scores, chunk_start }, [scores.buffer]);
+        self.postMessage({type: 'PCA_CHUNK_RESULT', scores, chunk_start}, [scores.buffer]);
     }
 
     if (type === 'KMEANS_ASSIGN_CHUNK') {
         // Assign points to clusters for a chunk
-        const { embeddings_flat, n_samples, n_features, centroids, k, chunk_start } = data;
+        const {embeddings_flat, n_samples, n_features, centroids, k, chunk_start} = data;
         const labels = new Int8Array(n_samples);
 
         for (let i = 0; i < n_samples; i++) {
@@ -61,12 +61,12 @@ self.onmessage = async (e) => {
             labels[i] = best_cluster;
         }
 
-        self.postMessage({ type: 'KMEANS_ASSIGN_RESULT', labels, chunk_start }, [labels.buffer]);
+        self.postMessage({type: 'KMEANS_ASSIGN_RESULT', labels, chunk_start}, [labels.buffer]);
     }
 
     if (type === 'KMEANS_UPDATE_CHUNK') {
         // Compute partial sums for centroid update
-        const { embeddings_flat, n_samples, n_features, labels, k, chunk_start } = data;
+        const {embeddings_flat, n_samples, n_features, labels, k, chunk_start} = data;
         const sums = new Float32Array(k * n_features);
         const counts = new Int32Array(k);
 
@@ -91,7 +91,7 @@ self.onmessage = async (e) => {
 
     if (type === 'NORMALIZE_CHUNK') {
         // Normalize a chunk of vectors
-        const { embeddings_flat, n_samples, n_features, chunk_start } = data;
+        const {embeddings_flat, n_samples, n_features, chunk_start} = data;
         const normalized = new Float32Array(n_samples * n_features);
 
         for (let i = 0; i < n_samples; i++) {

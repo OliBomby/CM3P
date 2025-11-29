@@ -1,0 +1,57 @@
+name: Deploy Visualizer to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - visualizer/**
+
+permissions:
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Ensure wasm-pack
+        shell: pwsh
+        run: |
+          if (-not (Get-Command wasm-pack -ErrorAction SilentlyContinue)) {
+            cargo install wasm-pack
+          }
+
+      - name: Build WASM and site
+        shell: cmd
+        working-directory: visualizer
+        run: build_wasm.bat
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: visualizer
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

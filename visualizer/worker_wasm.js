@@ -328,6 +328,7 @@ function pickFields(row) {
         GameMode: row.GameMode ?? row.Mode ?? 'Unknown',
         RankedStatus: row.RankedStatus ?? row.Status ?? 'Unknown',
         DifficultyRating: row.DifficultyRating ?? 0,
+        SubmittedDate: row.SubmittedDate ?? null,
     };
 }
 

@@ -193,7 +193,8 @@ function updateColor() {
         ranked_status: 'RankedStatus',
         rankedstatus: 'RankedStatus',
         approved: 'RankedStatus',
-        difficulty: 'DifficultyRating'
+        difficulty: 'DifficultyRating',
+        submitteddate: 'SubmittedDate'
     };
     const fieldName = fieldMap[modeNorm] || raw; // fall back to raw select value
 
@@ -219,6 +220,88 @@ function updateColor() {
         }
 
         const colors = nums.map(colorFor);
+        Plotly.restyle(dom.viz, {
+            'marker.color': [colors]
+        }, [0]);
+        return;
+    }
+
+    // Special handling for SubmittedDate with rainbow colormap
+    if (modeNorm === 'submitteddate') {
+        if (!state.fields.length || !("SubmittedDate" in (state.fields[0] || {}))) {
+            console.warn('SubmittedDate not available in fields');
+            Plotly.restyle(dom.viz, {'marker.color': [state.clusters], 'marker.colorscale': colorscale}, [0]);
+            return;
+        }
+
+        // Extract dates and convert to timestamps
+        const dates = state.fields.map(f => {
+            const dateVal = f.SubmittedDate;
+            if (!dateVal) return null;
+            const timestamp = new Date(dateVal).getTime();
+            return isNaN(timestamp) ? null : timestamp;
+        });
+
+        // Find min and max for normalization (excluding nulls)
+        const validDates = dates.filter(d => d !== null);
+        if (validDates.length === 0) {
+            console.warn('No valid dates found in SubmittedDate');
+            Plotly.restyle(dom.viz, {'marker.color': ['#555']}, [0]);
+            return;
+        }
+
+        const minDate = Math.min(...validDates);
+        const maxDate = Math.max(...validDates);
+        const dateRange = maxDate - minDate;
+
+        // Rainbow colormap from matplotlib (violet to red)
+        // Colors from left (oldest) to right (newest) of spectrum
+        function rainbowColor(normalized) {
+            // normalized is between 0 (oldest) and 1 (newest)
+            // Rainbow: violet -> blue -> cyan -> green -> yellow -> orange -> red
+            if (normalized < 0) normalized = 0;
+            if (normalized > 1) normalized = 1;
+
+            // Use HSV color space: H goes from 270° (violet) to 0° (red)
+            const hue = (1 - normalized) * 270; // Reverse so newest=red (0°), oldest=violet (270°)
+
+            // Convert HSV to RGB
+            const c = 1; // Full saturation and value for vibrant colors
+            const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+            const m = 0;
+
+            let r, g, b;
+            if (hue >= 0 && hue < 60) {
+                r = c; g = x; b = 0;
+            } else if (hue >= 60 && hue < 120) {
+                r = x; g = c; b = 0;
+            } else if (hue >= 120 && hue < 180) {
+                r = 0; g = c; b = x;
+            } else if (hue >= 180 && hue < 240) {
+                r = 0; g = x; b = c;
+            } else if (hue >= 240 && hue < 300) {
+                r = x; g = 0; b = c;
+            } else {
+                r = c; g = 0; b = x;
+            }
+
+            // Convert to 0-255 range and then to hex
+            const toHex = (val) => {
+                const hex = Math.round((val + m) * 255).toString(16);
+                return hex.length === 1 ? '0' + hex : hex;
+            };
+
+            return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+        }
+
+        // Map each date to a color
+        const colors = dates.map(timestamp => {
+            if (timestamp === null) return '#555'; // Gray for missing dates
+            if (dateRange === 0) return rainbowColor(0.5); // All same date
+            const normalized = (timestamp - minDate) / dateRange;
+            return rainbowColor(normalized);
+        });
+
         Plotly.restyle(dom.viz, {
             'marker.color': [colors]
         }, [0]);

@@ -2,38 +2,115 @@ import logging
 import sys
 from pathlib import Path
 
-import hydra
+import argparse
 import pandas as pd
 import torch
-from omegaconf import OmegaConf
 from tqdm import tqdm
-from transformers import TrainingArguments
 from transformers.trainer_utils import set_seed
 
 from cm3p.modeling_cm3p import CM3PModel
-from cm3p.parsing_cm3p import CM3PBeatmapParser
 from cm3p.processing_cm3p import CM3PProcessor
-from cm3p.tokenization_cm3p import CM3PBeatmapTokenizer, CM3PMetadataTokenizer
-from config import TrainConfig
-from mmrs_dataset import MmrsDataset, worker_init_fn
+from utils.mmrs_dataset import MmrsDataset, worker_init_fn
 from utils.data_utils import filter_mmrs_metadata, load_mmrs_metadata
-from transformers import WhisperFeatureExtractor
-import json
+from config import DataSetConfig
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-@hydra.main(config_path="configs/train", config_name="v1", version_base="1.1")
-def main(args: TrainConfig):
-    # Convert Hydra config to dataclass instance
-    args: TrainConfig = OmegaConf.to_object(args)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Extract CM3P beatmap embeddings to a parquet file.")
+    # Model repo/name
+    parser.add_argument(
+        "--pretrained-model-name-or-path",
+        type=str,
+        default="OliBomby/CM3P",
+        help="Hugging Face model repo or local path for from_pretrained.",
+    )
+    # Dataset paths (no split between train/test)
+    parser.add_argument(
+        "--dataset-paths",
+        type=str,
+        nargs="+",
+        required=True,
+        help="One or more dataset root directories. Produce these with Mapperator.",
+    )
+    # Index range filters
+    parser.add_argument("--start", type=int, default=None, help="Dataset start index (beatmap set offset).")
+    parser.add_argument("--end", type=int, default=None, help="Dataset end index (exclusive).")
+    # Gamemodes
+    parser.add_argument(
+        "--gamemodes",
+        type=int,
+        nargs="+",
+        default=[ 0, 1, 2, 3 ],
+        help="List of gamemodes to include (e.g., 0, 1, 2, 3).",
+    )
+    # Year/difficulty filters
+    parser.add_argument("--min-year", type=int, default=None, help="Minimum beatmap year.")
+    parser.add_argument("--max-year", type=int, default=None, help="Maximum beatmap year.")
+    parser.add_argument("--min-difficulty", type=float, default=None, help="Minimum difficulty rating.")
+    parser.add_argument("--max-difficulty", type=float, default=None, help="Maximum difficulty rating.")
+    # Loader args
+    parser.add_argument("--batch-size", type=int, default=4, help="Batch size for processing features.")
+    parser.add_argument("--dataloader-num-workers", type=int, default=4, help="Number of dataloader workers.")
+    # Misc
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="beatmap_embeddings.parquet",
+        help="Output parquet file path.",
+    )
+    return parser.parse_args()
 
-    if args.training.get("optim", None) == "muon":
-        # remove unsupported optimizer key for TrainingArguments
-        del args.training["optim"]
 
-    training_args = TrainingArguments(**args.training)
-    set_seed(training_args.seed)
+def build_minimal_dataset_config(ns: argparse.Namespace) -> DataSetConfig:
+    # Create a minimal config that disables augmentation and ensures source metadata is included
+    cfg = DataSetConfig(
+        # Paths – use train paths since MmrsDataset expects train_dataset_paths for non-test
+        train_dataset_paths=[str(p) for p in ns.dataset_paths],
+        test_dataset_paths=[str(p) for p in ns.dataset_paths],
+        # Index range
+        train_dataset_start=ns.start,
+        train_dataset_end=ns.end,
+        test_dataset_start=None,
+        test_dataset_end=None,
+        # Filters
+        gamemodes=ns.gamemodes,
+        min_year=ns.min_year,
+        max_year=ns.max_year,
+        min_difficulty=ns.min_difficulty,
+        max_difficulty=ns.max_difficulty,
+        # Behavior
+        cycle_length=1,
+        drop_last=False,
+        include_audio=True,
+        include_beatmap=True,
+        include_metadata=True,
+        include_source_metadata=True,
+        sampling_rate=16000,
+        # Labels disabled for pure embedding extraction
+        labels="none",
+        # Augmentations disabled/minimized
+        dt_augment_prob=0.0,
+        beatmap_mismatch_prob=0.0,
+        metadata_dropout_prob=0.0,
+        train_metadata_variations=1,
+        test_metadata_variations=1,
+        # Masked LM related (unused)
+        masked_lm_prob=0.0,
+        masked_lm_split=[0.8, 0.9, 1.0],
+        dt_augment_range=[0.9, 1.1],
+        dt_augment_sqrt=False,
+    )
+    return cfg
+
+
+def main():
+    ns = parse_args()
+
+    set_seed(ns.seed)
 
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -42,56 +119,42 @@ def main(args: TrainConfig):
     )
     logger.setLevel(logging.INFO)
 
-    # Force deterministic dataset behavior for embedding extraction
-    args.dataset.dt_augment_prob = 0.0
-    args.dataset.beatmap_mismatch_prob = 0.0
-    args.dataset.metadata_dropout_prob = 0.0
-    args.dataset.train_metadata_variations = 1
-    args.dataset.test_metadata_variations = 1
-    # args.dataset.labels = "none"
-    args.dataset.include_source_metadata = True
-
-    # Prepare dataset-related dynamic tokenizer configs (same pattern as validate_dataset)
-    args.dataset.train_dataset_start = None
-    args.dataset.train_dataset_end = None
-    args.dataset.drop_last = False
-
+    # Load metadata and apply filters early to estimate batches and to set dynamic maps for processor if needed
     metadata = filter_mmrs_metadata(
-        load_mmrs_metadata(args.dataset.train_dataset_paths),
-        start=args.dataset.train_dataset_start,
-        end=args.dataset.train_dataset_end,
-        gamemodes=args.dataset.gamemodes,
-        min_year=args.dataset.min_year,
-        max_year=args.dataset.max_year,
-        min_difficulty=args.dataset.min_difficulty,
-        max_difficulty=args.dataset.max_difficulty,
+        load_mmrs_metadata(ns.dataset_paths),
+        start=ns.start,
+        end=ns.end,
+        gamemodes=ns.gamemodes,
+        min_year=ns.min_year,
+        max_year=ns.max_year,
+        min_difficulty=ns.min_difficulty,
+        max_difficulty=ns.max_difficulty,
     )
 
-    # metadata index is MultiIndex [BeatmapSetId, Id]; ensure dynamic maps derive from filtered metadata
-    if args.processor.metadata_tokenizer.modes is None:
-        args.processor.metadata_tokenizer.modes = metadata.reset_index().set_index(["ModeInt"])["Mode"].to_dict()
-    if args.processor.metadata_tokenizer.statuses is None:
-        args.processor.metadata_tokenizer.statuses = metadata.reset_index().set_index(["Ranked"])["Status"].to_dict()
-    if args.processor.metadata_tokenizer.mappers is None:
-        args.processor.metadata_tokenizer.mappers = metadata.reset_index().set_index(["UserId"])["Creator"].to_dict()
-    if args.processor.metadata_tokenizer.tags is None:
-        all_tag_ids = metadata["TopTagIds"].explode().dropna().unique().tolist()
-        tags_info_path = Path(__file__).parent / "resources" / "tags.json"
-        tags_info = json.load(open(tags_info_path, "r", encoding="utf-8"))["tags"]
-        tags_info = {int(tag["id"]): {"name": tag["name"], "ruleset_id": tag["ruleset_id"], "description": tag["description"]} for tag in tags_info}
-        args.processor.metadata_tokenizer.tags = {tag_id: tags_info[tag_id] for tag_id in tags_info if tag_id in all_tag_ids}
+    # Initialize processor and model from_pretrained similar to README
+    repo_id = ns.pretrained_model_name_or_path
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    processor = CM3PProcessor(
-        audio_feature_extractor=WhisperFeatureExtractor(**args.processor.audio_feature_extractor.__dict__),
-        beatmap_parser=CM3PBeatmapParser(**args.processor.beatmap_parser.__dict__),
-        beatmap_tokenizer=CM3PBeatmapTokenizer(**args.processor.beatmap_tokenizer.__dict__),
-        metadata_tokenizer=CM3PMetadataTokenizer(**args.processor.metadata_tokenizer.__dict__),
-        default_kwargs=args.processor.default_kwargs,
+    logger.info(f"Loading processor from: {repo_id}")
+    processor = CM3PProcessor.from_pretrained(repo_id)
+
+    logger.info(f"Loading model from: {repo_id}")
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    model: CM3PModel = CM3PModel.from_pretrained(
+        repo_id,
+        device_map=device,
+        dtype=dtype,
+        trust_remote_code=True,
+        revision="main",
     )
+    model.eval()
 
-    # Load training dataset (non-test for original configuration / ordering). Disabling drop_last.
+    # Minimal dataset config (no augmentation)
+    dataset_cfg = build_minimal_dataset_config(ns)
+
+    # Load dataset (non-test for ordering). Disabling drop_last.
     dataset = MmrsDataset(
-        args.dataset,
+        dataset_cfg,
         processor=processor,
         test=False,
     )
@@ -99,28 +162,28 @@ def main(args: TrainConfig):
     # Construct DataLoader
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=training_args.per_device_train_batch_size,
-        num_workers=training_args.dataloader_num_workers,
-        timeout=600 if training_args.dataloader_num_workers > 0 else 0,
+        batch_size=ns.batch_size,
+        num_workers=ns.dataloader_num_workers,
+        timeout=600 if ns.dataloader_num_workers > 0 else 0,
         worker_init_fn=worker_init_fn,
         drop_last=False,
         in_order=True,
     )
 
-    # Load pretrained CM3P model
-    if args.from_pretrained is None:
-        raise ValueError("from_pretrained must be specified in the config to load the CM3P model.")
-
-    logger.info(f"Loading CM3P model from: {args.from_pretrained}")
-    model = CM3PModel.from_pretrained(args.from_pretrained)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.eval()
-
-    est_batches = int(metadata["TotalLength"].sum() // args.processor.default_kwargs["beatmap_kwargs"]["window_stride_sec"] // training_args.per_device_train_batch_size + 1)
+    # Estimate number of batches: sum of lengths / stride / batch size
+    # Use default processor kwargs if available; fall back to 16s stride
+    window_stride_sec = 16
+    try:
+        # AutoProcessor may carry default beatmap kwargs in a consistent attribute
+        default_kwargs = getattr(processor, "default_kwargs", {})
+        beatmap_kwargs = default_kwargs.get("beatmap_kwargs", {})
+        window_stride_sec = int(beatmap_kwargs.get("window_stride_sec", window_stride_sec))
+    except Exception:
+        pass
+    est_batches = int(metadata["TotalLength"].sum() // window_stride_sec // ns.batch_size + 1)
 
     # Accumulators for embeddings per beatmap
-    embed_accumulator: dict[int, dict[str, any]] = {}
+    embed_accumulator: dict[int, dict[str, Any]] = {}
     # Structure: beatmap_id -> { 'sum': np.ndarray, 'count': int }
 
     with torch.no_grad():
@@ -129,18 +192,16 @@ def main(args: TrainConfig):
             if len(batch.get("input_ids", [])) == 0:
                 continue
 
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
+            # Prepare inputs for model; the AutoProcessor returns dict-compatible tensors
+            inputs = {
+                "input_ids": batch["input_ids"].to(device),
+                "attention_mask": batch["attention_mask"].to(device),
+            }
             input_features = batch.get("input_features", None)
             if input_features is not None:
-                input_features = input_features.to(device)
+                inputs["input_features"] = input_features.to(device)
 
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                input_features=input_features,
-                return_loss=False,
-            )
+            outputs = model(**inputs, return_loss=False)
             # Normalized beatmap embeddings (forward applies projection + normalization)
             embeds = outputs.beatmap_embeds.detach().cpu().numpy()
 
@@ -189,7 +250,7 @@ def main(args: TrainConfig):
     cols = ['Artist', 'ArtistUnicode', 'Creator', 'FavouriteCount', 'BeatmapSetId', 'Nsfw', 'Offset', 'BeatmapSetPlayCount', 'Source', 'BeatmapSetStatus', 'Spotlight', 'Title', 'TitleUnicode', 'BeatmapSetUserId', 'Video', 'Description', 'GenreId', 'GenreName', 'LanguageId', 'LanguageName', 'PackTags', 'Ratings', 'DownloadDisabled', 'BeatmapSetBpm', 'CanBeHyped', 'DiscussionLocked', 'BeatmapSetIsScoreable', 'BeatmapSetLastUpdated', 'BeatmapSetRanked', 'RankedDate', 'Storyboard', 'SubmittedDate', 'Tags', 'DifficultyRating', 'Id', 'Mode', 'Status', 'TotalLength', 'UserId', 'Version', 'Checksum', 'MaxCombo', 'Accuracy', 'Ar', 'Bpm', 'CountCircles', 'CountSliders', 'CountSpinners', 'Cs', 'Drain', 'HitLength', 'IsScoreable', 'LastUpdated', 'ModeInt', 'PassCount', 'PlayCount', 'Ranked', 'Owners', 'TopTagIds', 'TopTagCounts', 'StarRating', 'OmdbTags', 'AudioFile', 'BeatmapSetFolder', 'BeatmapFile', 'embedding']
     merged_df = merged_df[cols]
 
-    output_path = Path("beatmap_embeddings.parquet")
+    output_path = Path(ns.output)
     merged_df.to_parquet(output_path, index=False)
     logger.info(f"Final DataFrame has {merged_df.shape[0]} rows.")
     logger.info(f"Final DataFrame has {merged_df.shape[1]} columns.")

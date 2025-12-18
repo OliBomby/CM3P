@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 
 import argparse
+from typing import Any
+
 import pandas as pd
 import torch
 from tqdm import tqdm
@@ -11,9 +13,8 @@ from transformers.trainer_utils import set_seed
 from cm3p.modeling_cm3p import CM3PModel
 from cm3p.processing_cm3p import CM3PProcessor
 from utils.mmrs_dataset import MmrsDataset, worker_init_fn
-from utils.data_utils import filter_mmrs_metadata, load_mmrs_metadata
+from utils.beatmap_files_dataset import BeatmapFilesDataset, REQUIRED_COLUMNS
 from config import DataSetConfig
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,13 @@ def parse_args() -> argparse.Namespace:
         "--dataset-paths",
         type=str,
         nargs="+",
-        required=True,
         help="One or more dataset root directories. Produce these with Mapperator.",
+    )
+    parser.add_argument(
+        "--beatmap-paths",
+        type=str,
+        nargs="+",
+        help="One or more paths to .osu/.osz files or folders to search recursively.",
     )
     # Index range filters
     parser.add_argument("--start", type=int, default=None, help="Dataset start index (beatmap set offset).")
@@ -43,7 +49,7 @@ def parse_args() -> argparse.Namespace:
         "--gamemodes",
         type=int,
         nargs="+",
-        default=[ 0, 1, 2, 3 ],
+        default=[0, 1, 2, 3],
         help="List of gamemodes to include (e.g., 0, 1, 2, 3).",
     )
     # Year/difficulty filters
@@ -127,6 +133,14 @@ def main():
             print(f"Error: --merge-with must point to a .parquet file: {existing_path}")
             sys.exit(1)
 
+    # Validate source args: either datasets or beatmap paths must be provided
+    if not ns.dataset_paths and not ns.beatmap_paths:
+        print("Error: Provide either --dataset-paths or --beatmap-paths.")
+        sys.exit(1)
+    if ns.dataset_paths and ns.beatmap_paths:
+        print("Error: Provide only one of --dataset-paths or --beatmap-paths, not both.")
+        sys.exit(1)
+
     set_seed(ns.seed)
 
     logging.basicConfig(
@@ -157,12 +171,24 @@ def main():
     # Minimal dataset config (no augmentation)
     dataset_cfg = build_minimal_dataset_config(ns)
 
-    # Load dataset (non-test for ordering). Disabling drop_last.
-    dataset = MmrsDataset(
-        dataset_cfg,
-        processor=processor,
-        test=False,
-    )
+    # Choose dataset implementation
+    if ns.beatmap_paths:
+        dataset = BeatmapFilesDataset(
+            ns.beatmap_paths,
+            processor=processor,
+            sampling_rate=dataset_cfg.sampling_rate,
+            include_audio=dataset_cfg.include_audio,
+            include_beatmap=dataset_cfg.include_beatmap,
+            include_metadata=dataset_cfg.include_metadata,
+        )
+        metadata = dataset.metadata
+    else:
+        dataset = MmrsDataset(
+            dataset_cfg,
+            processor=processor,
+            test=False,
+        )
+        metadata = dataset.get_filtered_metadata()
 
     # Construct DataLoader
     dataloader = torch.utils.data.DataLoader(
@@ -175,11 +201,7 @@ def main():
         in_order=True,
     )
 
-    # Load metadata and apply filters early to estimate batches and to set dynamic maps for processor if needed
-    metadata = dataset.get_filtered_metadata()
-
     # Estimate number of batches: sum of lengths / stride / batch size
-    # Use default processor kwargs if available; fall back to 16s stride
     window_stride_sec = 16
     try:
         default_kwargs = getattr(processor, "default_kwargs", {})
@@ -254,7 +276,7 @@ def main():
     merged_df = embeddings_df.merge(meta_df, left_on='beatmap_id', right_on='Id', how='left')
 
     # Reorder columns to put embedding at the end, keeping all original metadata columns
-    cols = ['Artist', 'ArtistUnicode', 'Creator', 'FavouriteCount', 'BeatmapSetId', 'Nsfw', 'Offset', 'BeatmapSetPlayCount', 'Source', 'BeatmapSetStatus', 'Spotlight', 'Title', 'TitleUnicode', 'BeatmapSetUserId', 'Video', 'Description', 'GenreId', 'GenreName', 'LanguageId', 'LanguageName', 'PackTags', 'Ratings', 'DownloadDisabled', 'BeatmapSetBpm', 'CanBeHyped', 'DiscussionLocked', 'BeatmapSetIsScoreable', 'BeatmapSetLastUpdated', 'BeatmapSetRanked', 'RankedDate', 'Storyboard', 'SubmittedDate', 'Tags', 'DifficultyRating', 'Id', 'Mode', 'Status', 'TotalLength', 'UserId', 'Version', 'Checksum', 'MaxCombo', 'Accuracy', 'Ar', 'Bpm', 'CountCircles', 'CountSliders', 'CountSpinners', 'Cs', 'Drain', 'HitLength', 'IsScoreable', 'LastUpdated', 'ModeInt', 'PassCount', 'PlayCount', 'Ranked', 'Owners', 'TopTagIds', 'TopTagCounts', 'StarRating', 'OmdbTags', 'AudioFile', 'BeatmapSetFolder', 'BeatmapFile', 'embedding']
+    cols = REQUIRED_COLUMNS + ['embedding']
     merged_df = merged_df[cols]
 
     # If requested, merge into an existing embeddings parquet, preferring newly generated rows on Id collisions

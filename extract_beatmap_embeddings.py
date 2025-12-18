@@ -94,7 +94,7 @@ def build_minimal_dataset_config(ns: argparse.Namespace) -> DataSetConfig:
         drop_last=False,
         include_audio=True,
         include_beatmap=True,
-        include_metadata=True,
+        include_metadata=False,
         include_source_metadata=True,
         sampling_rate=16000,
         # Labels disabled for pure embedding extraction
@@ -191,7 +191,6 @@ def main():
     # Use default processor kwargs if available; fall back to 16s stride
     window_stride_sec = 16
     try:
-        # AutoProcessor may carry default beatmap kwargs in a consistent attribute
         default_kwargs = getattr(processor, "default_kwargs", {})
         beatmap_kwargs = default_kwargs.get("beatmap_kwargs", {})
         window_stride_sec = int(beatmap_kwargs.get("window_stride_sec", window_stride_sec))
@@ -209,7 +208,7 @@ def main():
             if len(batch.get("input_ids", [])) == 0:
                 continue
 
-            # Prepare inputs for model; the AutoProcessor returns dict-compatible tensors
+            # Prepare inputs for model; the Processor returns dict-compatible tensors
             inputs = {
                 "input_ids": batch["input_ids"].to(device),
                 "attention_mask": batch["attention_mask"].to(device),

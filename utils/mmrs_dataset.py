@@ -81,7 +81,7 @@ class MmrsDataset(IterableDataset):
         self.end = self.end or len(self.metadata.index.get_level_values(0).unique())
         self.subset_ids = subset_ids
 
-    def _get_filtered_metadata(self):
+    def get_filtered_metadata(self):
         """Get the subset IDs for the dataset with all filtering applied."""
         return filter_mmrs_metadata(
             self.metadata,
@@ -96,7 +96,7 @@ class MmrsDataset(IterableDataset):
         )
 
     def __iter__(self):
-        filtered_metadata = self._get_filtered_metadata()
+        filtered_metadata = self.get_filtered_metadata()
         filtered_metadata = get_worker_metadata_subset(filtered_metadata)
 
         if not self.test:

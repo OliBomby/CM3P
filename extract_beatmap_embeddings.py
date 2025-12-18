@@ -136,18 +136,6 @@ def main():
     )
     logger.setLevel(logging.INFO)
 
-    # Load metadata and apply filters early to estimate batches and to set dynamic maps for processor if needed
-    metadata = filter_mmrs_metadata(
-        load_mmrs_metadata(ns.dataset_paths),
-        start=ns.start,
-        end=ns.end,
-        gamemodes=ns.gamemodes,
-        min_year=ns.min_year,
-        max_year=ns.max_year,
-        min_difficulty=ns.min_difficulty,
-        max_difficulty=ns.max_difficulty,
-    )
-
     # Initialize processor and model from_pretrained similar to README
     repo_id = ns.pretrained_model_name_or_path
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -186,6 +174,9 @@ def main():
         drop_last=False,
         in_order=True,
     )
+
+    # Load metadata and apply filters early to estimate batches and to set dynamic maps for processor if needed
+    metadata = dataset.get_filtered_metadata()
 
     # Estimate number of batches: sum of lengths / stride / batch size
     # Use default processor kwargs if available; fall back to 16s stride

@@ -14,15 +14,15 @@ from utils.mmrs_dataset import get_worker_metadata_subset
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_COLUMNS = ['Artist', 'ArtistUnicode', 'Creator', 'FavouriteCount', 'BeatmapSetId', 'Nsfw', 'Offset',
+REQUIRED_COLUMNS = ['Id', 'Artist', 'ArtistUnicode', 'Creator', 'FavouriteCount', 'BeatmapSetId', 'Nsfw', 'Offset',
                     'BeatmapSetPlayCount', 'Source', 'BeatmapSetStatus', 'Spotlight', 'Title', 'TitleUnicode',
                     'BeatmapSetUserId', 'Video', 'Description', 'GenreId', 'GenreName', 'LanguageId', 'LanguageName',
                     'PackTags', 'Ratings', 'DownloadDisabled', 'BeatmapSetBpm', 'CanBeHyped', 'DiscussionLocked',
                     'BeatmapSetIsScoreable', 'BeatmapSetLastUpdated', 'BeatmapSetRanked', 'RankedDate', 'Storyboard',
-                    'SubmittedDate', 'Tags', 'DifficultyRating', 'Id', 'Mode', 'Status', 'TotalLength', 'UserId',
-                    'Version', 'Checksum', 'MaxCombo', 'Accuracy', 'Ar', 'Bpm', 'CountCircles', 'CountSliders',
-                    'CountSpinners', 'Cs', 'Drain', 'HitLength', 'IsScoreable', 'LastUpdated', 'ModeInt', 'PassCount',
-                    'PlayCount', 'Ranked', 'Owners', 'TopTagIds', 'TopTagCounts', 'StarRating', 'OmdbTags', 'AudioFile',
+                    'SubmittedDate', 'Tags', 'DifficultyRating', 'Mode', 'Status', 'TotalLength', 'UserId', 'Version',
+                    'Checksum', 'MaxCombo', 'Accuracy', 'Ar', 'Bpm', 'CountCircles', 'CountSliders', 'CountSpinners',
+                    'Cs', 'Drain', 'HitLength', 'IsScoreable', 'LastUpdated', 'ModeInt', 'PassCount', 'PlayCount',
+                    'Ranked', 'Owners', 'TopTagIds', 'TopTagCounts', 'StarRating', 'OmdbTags', 'AudioFile',
                     'BeatmapSetFolder', 'BeatmapFile']
 
 
@@ -93,6 +93,8 @@ def _parse_osu_file(osu_path: Path) -> dict:
     data['ArtistUnicode'] = _kv(meta, 'ArtistUnicode') or pd.NA
     data['Creator'] = _kv(meta, 'Creator') or pd.NA
     data['Version'] = _kv(meta, 'Version') or pd.NA
+    data['Id'] = _kv(meta, 'BeatmapID') or pd.NA
+    data['BeatmapSetId'] = _kv(meta, 'BeatmapSetID') or pd.NA
 
     # Difficulty
     diff = sections.get('Difficulty', [])
@@ -158,19 +160,6 @@ def _parse_osu_file(osu_path: Path) -> dict:
             except Exception:
                 pass
     data['ModeInt'] = mode_int
-
-    # Defaults / placeholders
-    data['Id'] = abs(hash(osu_path)) % (2 ** 31)
-    data['BeatmapSetId'] = abs(hash(osu_path.parent)) % (2 ** 31)
-    data['Status'] = pd.NA
-    data['DifficultyRating'] = pd.NA
-    data['UserId'] = pd.NA
-    data['SubmittedDate'] = pd.Timestamp.utcnow()
-    data['Mode'] = pd.NA
-    data['Ranked'] = pd.NA
-    data['TopTagIds'] = []
-    data['TopTagCounts'] = []
-    data['StarRating'] = []
     return data
 
 

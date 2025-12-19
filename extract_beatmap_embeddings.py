@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         "--beatmap-paths",
         type=str,
         nargs="+",
-        help="One or more paths to .osu/.osz files or folders to search recursively.",
+        help="One or more paths to .osu/.osz files or folders to search recursively. This option will not include any online metadata.",
     )
     # Index range filters
     parser.add_argument("--start", type=int, default=None, help="Dataset start index (beatmap set offset).")
@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-difficulty", type=float, default=None, help="Maximum difficulty rating.")
     # Loader args
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size for processing features.")
-    parser.add_argument("--dataloader-num-workers", type=int, default=4, help="Number of dataloader workers.")
+    parser.add_argument("--dataloader-num-workers", type=int, default=0, help="Number of dataloader workers.")
     # Optional merge with existing embeddings
     parser.add_argument(
         "--merge-with",
@@ -82,8 +82,8 @@ def build_minimal_dataset_config(ns: argparse.Namespace) -> DataSetConfig:
     # Create a minimal config that disables augmentation and ensures source metadata is included
     cfg = DataSetConfig(
         # Paths – use train paths since MmrsDataset expects train_dataset_paths for non-test
-        train_dataset_paths=[str(p) for p in ns.dataset_paths],
-        test_dataset_paths=[str(p) for p in ns.dataset_paths],
+        train_dataset_paths=[str(p) for p in ns.dataset_paths] if ns.dataset_paths else [],
+        test_dataset_paths=[str(p) for p in ns.dataset_paths] if ns.dataset_paths else [],
         # Index range
         train_dataset_start=ns.start,
         train_dataset_end=ns.end,
@@ -162,7 +162,7 @@ def main():
     model: CM3PModel = CM3PModel.from_pretrained(
         repo_id,
         device_map=device,
-        dtype=dtype,
+        torch_dtype=dtype,
         trust_remote_code=True,
         revision="main",
     )
@@ -196,7 +196,6 @@ def main():
         batch_size=ns.batch_size,
         num_workers=ns.dataloader_num_workers,
         timeout=600 if ns.dataloader_num_workers > 0 else 0,
-        worker_init_fn=worker_init_fn,
         drop_last=False,
         in_order=True,
     )
@@ -228,11 +227,11 @@ def main():
             }
             input_features = batch.get("input_features", None)
             if input_features is not None:
-                inputs["input_features"] = input_features.to(device)
+                inputs["input_features"] = input_features.to(device=device, dtype=dtype)
 
             outputs = model(**inputs, return_loss=False)
             # Normalized beatmap embeddings (forward applies projection + normalization)
-            embeds = outputs.beatmap_embeds.detach().cpu().numpy()
+            embeds = outputs.beatmap_embeds.detach().float().cpu().numpy()
 
             beatmap_ids = batch.get("beatmap_id", None)
             if beatmap_ids is None:
@@ -294,9 +293,16 @@ def main():
                 if col not in existing_df.columns:
                     existing_df[col] = pd.NA
             existing_df = existing_df[merged_df.columns]
-            # Concat existing first, then new, and drop duplicates on Id keeping the last (new)
-            final_df = pd.concat([existing_df, merged_df], ignore_index=True)
-            final_df = final_df.drop_duplicates(subset=['Id'], keep='last').reset_index(drop=True)
+
+            # Index by Id and ensure identical column order
+            existing_idx = existing_df.set_index('Id').reindex(columns=merged_df.columns.drop('Id'))
+            merged_idx = merged_df.set_index('Id').reindex(columns=existing_idx.columns)
+
+            # Prefer new rows where Id overlaps, and keep existing where new is missing
+            # Avoids concat with empty/all-NA frames
+            final_df = merged_idx.combine_first(existing_idx)
+            final_df = final_df.reset_index()
+
             logger.info(f"Merged rows: existing={len(existing_df)}, new={len(merged_df)}, result={len(final_df)}")
         except Exception as e:
             logger.warning(f"Failed to merge with existing embeddings file '{existing_path}': {e}")

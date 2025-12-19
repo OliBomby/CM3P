@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import zipfile
 from pathlib import Path
+import tempfile
 
 import pandas as pd
 from pandas import DataFrame
@@ -163,9 +164,8 @@ def _parse_osu_file(osu_path: Path) -> dict:
     return data
 
 
-def build_metadata_dataframe(paths: list[str]) -> DataFrame:
+def build_metadata_dataframe(paths: list[str], extract_root: Path) -> DataFrame:
     files = _collect_paths(paths)
-    extract_root = Path('./tmp_osz_extract')
     extract_root.mkdir(exist_ok=True)
 
     rows: list[dict] = []
@@ -200,7 +200,10 @@ class BeatmapFilesDataset(IterableDataset):
     ):
         super().__init__()
         self.beatmap_paths = beatmap_paths
-        self.metadata = build_metadata_dataframe(beatmap_paths)
+        # create a temp directory that lives with the dataset lifecycle
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="cm3p_osz_")
+        self._extract_root = Path(self._tmpdir.name)
+        self.metadata = build_metadata_dataframe(beatmap_paths, self._extract_root)
         self.processor = processor
         self.sampling_rate = sampling_rate
         self.include_audio = include_audio
@@ -210,6 +213,14 @@ class BeatmapFilesDataset(IterableDataset):
     def __iter__(self):
         filtered_metadata = get_worker_metadata_subset(self.metadata)
         return self._iter(filtered_metadata)
+
+    def __del__(self):
+        # ensure temp directory is cleaned up
+        try:
+            if hasattr(self, "_tmpdir") and self._tmpdir is not None:
+                self._tmpdir.cleanup()
+        except Exception:
+            pass
 
     def _iter(self, metadata: DataFrame):
         for beatmapset_id in metadata.index.get_level_values(0).unique():

@@ -35,7 +35,7 @@ def processor_and_model():
         proc = CM3PProcessor.from_pretrained(HF_CHECKPOINT)
         mdl = CM3PModel.from_pretrained(
             HF_CHECKPOINT,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
             device_map=device,
             attn_implementation=attn_implementation,
         )

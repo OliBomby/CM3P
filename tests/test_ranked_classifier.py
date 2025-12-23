@@ -31,7 +31,7 @@ def test_ranked_classifier_runs(audio_path, beatmap_path, remote):
             )
             model = AutoModelForSequenceClassification.from_pretrained(
                 HF_CHECKPOINT,
-                torch_dtype=torch_dtype,
+                dtype=torch_dtype,
                 device_map=device,
                 attn_implementation=attn_implementation,
                 trust_remote_code=True,
@@ -41,7 +41,7 @@ def test_ranked_classifier_runs(audio_path, beatmap_path, remote):
             processor = CM3PProcessor.from_pretrained(HF_CHECKPOINT)
             model = CM3PForBeatmapClassification.from_pretrained(
                 HF_CHECKPOINT,
-                torch_dtype=torch_dtype,
+                dtype=torch_dtype,
                 device_map=device,
                 attn_implementation=attn_implementation,
             )

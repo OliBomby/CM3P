@@ -144,7 +144,7 @@ def main():
             print(f"[info] Loading model from {save_path} with dtype={torch_dtype} attn={args.attn_implementation}")
             model = model_cls.from_pretrained(
                 save_path,
-                torch_dtype=torch_dtype,
+                dtype=torch_dtype,
                 attn_implementation=args.attn_implementation,
                 trust_remote_code=args.trust_remote_code,
             )

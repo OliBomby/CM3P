@@ -162,7 +162,7 @@ def main():
     model: CM3PModel = CM3PModel.from_pretrained(
         repo_id,
         device_map=device,
-        torch_dtype=dtype,
+        dtype=dtype,
         trust_remote_code=True,
         revision="main",
     )

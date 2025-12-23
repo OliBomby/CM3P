@@ -12,7 +12,7 @@ from transformers.trainer_utils import set_seed
 
 from cm3p.modeling_cm3p import CM3PModel
 from cm3p.processing_cm3p import CM3PProcessor
-from utils.mmrs_dataset import MmrsDataset, worker_init_fn
+from utils.mmrs_dataset import MmrsDataset
 from utils.beatmap_files_dataset import BeatmapFilesDataset, REQUIRED_COLUMNS
 from config import DataSetConfig
 

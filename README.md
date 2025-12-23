@@ -39,7 +39,7 @@ beatmap_embeds = outputs.beatmap_embeds  # (beatmap_length_seconds / 16, project
 
 [The osu! Map Explorer](https://olibomby.github.io/CM3P/) is a static visualizer website that allows you to explore a dataset of beatmap embeddings in 2D space. You can search for beatmaps by title, artist, or mapper, and see the nearest neighbors.
 
-You can use [this Colab notebook](https://colab.research.google.com/github/OliBomby/CM3P/blob/main/colab/CM3P_embeddings.ipynb) or `extract_beatmap_embeddings.py` to easily make a dataset of embeddings from your own beatmaps for visualization.
+You can use [this Colab notebook](https://colab.research.google.com/github/OliBomby/CM3P/blob/master/colab/CM3P_embeddings.ipynb) or `extract_beatmap_embeddings.py` to easily make a dataset of embeddings from your own beatmaps for visualization.
 A dataset with a ton of precomputed beatmap embeddings can be found [here on Hugging Face Hub](https://huggingface.co/datasets/OliBomby/CM3P-Embeddings-244K).
 
 <img width="1715" height="1273" alt="image" src="https://github.com/user-attachments/assets/dbbc6354-8fce-4be0-aa17-26294d85d948" />

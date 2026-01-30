@@ -407,13 +407,13 @@ class CM3PMetadataTokenizer(PreTrainedTokenizer):
         self.mappers = mappers or {}
         self.tags = tags or {}
         self.mode_names_to_ids = {v: k for k, v in self.modes.items()}
-        self.mode_ids_to_names = self.modes
+        self.mode_ids_to_names = {int(k): v for k, v in self.modes.items()}
         self.status_names_to_ids = {v: k for k, v in self.statuses.items()}
-        self.status_ids_to_names = self.statuses
+        self.status_ids_to_names = {int(k): v for k, v in self.statuses.items()}
         self.mapper_names_to_ids = {v: k for k, v in self.mappers.items()}
-        self.mapper_ids_to_names = self.mappers
+        self.mapper_ids_to_names = {int(k): v for k, v in self.mappers.items()}
         self.tag_names_to_ids = {v['name']: k for k, v in self.tags.items()}
-        self.tag_ids_to_names = {k: v['name'] for k, v in self.tags.items()}
+        self.tag_ids_to_names = {int(k): v['name'] for k, v in self.tags.items()}
 
         if vocab_file is None:
             self.vocab = self._build_vocab_from_config()
